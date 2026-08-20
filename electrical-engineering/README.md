@@ -8,3 +8,4 @@ Tools here support engineering judgment; they do not replace applicable standard
 
 - [Cable Advisor Audit](CABLE_ADVISOR_AUDIT.md) — code and engineering review; rejected for direct engineering use in its current form.
 - [GElectrical Assessment](GELECTRICAL_ASSESSMENT.md) — promising network-analysis application; retained for a controlled trial, not approved as an authoritative cable-sizing source.
+- [Electrical and Revit Candidate Radar](CANDIDATE_RADAR.md) — ranked shortlist for the next engineering and workflow audits.
