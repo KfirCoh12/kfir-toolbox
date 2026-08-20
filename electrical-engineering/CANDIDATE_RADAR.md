@@ -10,7 +10,7 @@
 | 1 | [OpenMEP Suite](https://github.com/kakarot-oncloud/openmep-suite) | Cable sizing, voltage drop, short circuit, generator, UPS, lighting, schedules | **Audited; reject for direct use** |
 | 2 | [qmlElectrical](https://github.com/haydenburrows30/qmlElectrical) | Desktop cable sizing and voltage-drop calculator | **Audited; reject for engineering use** |
 | 3 | [pyRevitMEP](https://github.com/CyrilWaechter/pyRevitMEP) | Revit MEP utilities | **Inventoried; selected commands retained** |
-| 4 | [ElectricPy](https://github.com/engineerjoe440/ElectricPy) | Reusable electrical formulas and plots | **Reference-library audit** |
+| 4 | [ElectricPy](https://github.com/engineerjoe440/ElectricPy) | Reusable electrical formulas and plots | **Reviewed; retain narrow function candidates** |
 | 5 | [pandapower](https://github.com/e2nIEE/pandapower) | Power flow, network analysis, and short-circuit foundations | **Keep as a backend candidate** |
 | 6 | [VeraGrid](https://github.com/SanPen/VeraGrid) | Advanced grid planning and simulation | **Defer; too broad for current needs** |
 | 7 | [QElectroTech](https://github.com/qelectrotech/qelectrotech-source-mirror) | Electrical schematics and documentation | **Defer; drawing tool, not calculation authority** |
@@ -82,7 +82,7 @@ ElectricPy is an MIT-licensed Python formula library with documentation, package
 
 Its own README says testing is limited and asks for more verification. It is therefore more suitable as a source of reusable mathematical functions and comparisons than as a standards-compliance engine.
 
-**Current status:** Worth a function-level audit when we build a specific calculator. Do not adopt the entire library merely because it is convenient.
+**Current status:** Function-level review completed. Retain only narrow generic-math candidates for independent validation; it is not a cable or standards engine. See [ElectricPy review](ELECTRICPY_REVIEW.md).
 
 ## 5. pandapower
 
