@@ -7,7 +7,7 @@
 
 | Priority | Project | Main relevance | Initial decision |
 |---:|---|---|---|
-| 1 | [OpenMEP Suite](https://github.com/kakarot-oncloud/openmep-suite) | Cable sizing, voltage drop, short circuit, generator, UPS, lighting, schedules | **Full audit next** |
+| 1 | [OpenMEP Suite](https://github.com/kakarot-oncloud/openmep-suite) | Cable sizing, voltage drop, short circuit, generator, UPS, lighting, schedules | **Audited; reject for direct use** |
 | 2 | [qmlElectrical](https://github.com/haydenburrows30/qmlElectrical) | Desktop cable sizing and voltage-drop calculator | **Targeted cable-data audit** |
 | 3 | [pyRevitMEP](https://github.com/CyrilWaechter/pyRevitMEP) | Revit MEP utilities | **Inventory and compatibility audit** |
 | 4 | [ElectricPy](https://github.com/engineerjoe440/ElectricPy) | Reusable electrical formulas and plots | **Reference-library audit** |
@@ -45,7 +45,7 @@ The scope and compliance claims are unusually broad. Before trusting it, we need
 - project maturity, contributors, releases, and maintenance history
 - security and privacy implications if deployed as a web application
 
-**Current status:** Do not install or use yet. Perform a full code-and-data audit first.
+**Current status:** Full first-pass audit completed. Reject for direct engineering use; retain only interface and reporting ideas. See [OpenMEP Suite Audit](OPENMEP_AUDIT.md).
 
 ## 2. qmlElectrical
 
