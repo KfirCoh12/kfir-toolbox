@@ -9,7 +9,7 @@
 |---:|---|---|---|
 | 1 | [OpenMEP Suite](https://github.com/kakarot-oncloud/openmep-suite) | Cable sizing, voltage drop, short circuit, generator, UPS, lighting, schedules | **Audited; reject for direct use** |
 | 2 | [qmlElectrical](https://github.com/haydenburrows30/qmlElectrical) | Desktop cable sizing and voltage-drop calculator | **Audited; reject for engineering use** |
-| 3 | [pyRevitMEP](https://github.com/CyrilWaechter/pyRevitMEP) | Revit MEP utilities | **Inventory and compatibility audit** |
+| 3 | [pyRevitMEP](https://github.com/CyrilWaechter/pyRevitMEP) | Revit MEP utilities | **Inventoried; selected commands retained** |
 | 4 | [ElectricPy](https://github.com/engineerjoe440/ElectricPy) | Reusable electrical formulas and plots | **Reference-library audit** |
 | 5 | [pandapower](https://github.com/e2nIEE/pandapower) | Power flow, network analysis, and short-circuit foundations | **Keep as a backend candidate** |
 | 6 | [VeraGrid](https://github.com/SanPen/VeraGrid) | Advanced grid planning and simulation | **Defer; too broad for current needs** |
@@ -74,7 +74,7 @@ Audit focus:
 - trial only on detached or disposable models
 - confirm employer approval before installation on a managed computer
 
-**Current status:** Good future workflow candidate. Delay installation until the actual work environment and recurring tasks are understood.
+**Current status:** Inventory and first-pass risk review completed. No dedicated electrical toolset was found. Retain selected general QA/workflow commands, especially Room-versus-Space checking, but delay installation. See [pyRevitMEP review](../revit/PYREVITMEP_REVIEW.md).
 
 ## 4. ElectricPy
 
@@ -132,8 +132,9 @@ A polished interface, an “IEC compliant” label, or a cable-size output is no
 
 ## Recommended sequence
 
-1. Audit OpenMEP Suite's electrical calculation engines, data tables, tests, and licensing.
-2. Audit qmlElectrical's cable database and selection logic.
-3. Inventory pyRevitMEP commands without installing it.
-4. When a specific calculator is chosen, compare its formulas against ElectricPy and pandapower where relevant.
-5. Build or adapt only the smallest transparent workflow that survives benchmark testing.
+1. OpenMEP Suite audit — completed; rejected for direct engineering use.
+2. qmlElectrical audit — completed; rejected for engineering use.
+3. pyRevitMEP inventory — completed; selected general commands retained for future trials.
+4. Audit ElectricPy only at the function level to identify reusable, testable formulas.
+5. Search for narrower Revit QA scripts after real repeated tasks are known.
+6. Build or adapt only the smallest transparent workflow that survives benchmark testing.
