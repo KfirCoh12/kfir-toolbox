@@ -8,7 +8,7 @@
 | Priority | Project | Main relevance | Initial decision |
 |---:|---|---|---|
 | 1 | [OpenMEP Suite](https://github.com/kakarot-oncloud/openmep-suite) | Cable sizing, voltage drop, short circuit, generator, UPS, lighting, schedules | **Audited; reject for direct use** |
-| 2 | [qmlElectrical](https://github.com/haydenburrows30/qmlElectrical) | Desktop cable sizing and voltage-drop calculator | **Targeted cable-data audit** |
+| 2 | [qmlElectrical](https://github.com/haydenburrows30/qmlElectrical) | Desktop cable sizing and voltage-drop calculator | **Audited; reject for engineering use** |
 | 3 | [pyRevitMEP](https://github.com/CyrilWaechter/pyRevitMEP) | Revit MEP utilities | **Inventory and compatibility audit** |
 | 4 | [ElectricPy](https://github.com/engineerjoe440/ElectricPy) | Reusable electrical formulas and plots | **Reference-library audit** |
 | 5 | [pandapower](https://github.com/e2nIEE/pandapower) | Power flow, network analysis, and short-circuit foundations | **Keep as a backend candidate** |
@@ -59,7 +59,7 @@ Questions for a targeted review:
 - Are data sources and calculation tests visible?
 - Does the Windows build have a maintained release and safe installation route?
 
-**Current status:** Worth inspecting after OpenMEP, but not a trusted calculator yet.
+**Current status:** Targeted audit completed. Reject for engineering use; retain only UI-learning ideas. See [qmlElectrical Audit](QMLELECTRICAL_AUDIT.md).
 
 ## 3. pyRevitMEP
 
