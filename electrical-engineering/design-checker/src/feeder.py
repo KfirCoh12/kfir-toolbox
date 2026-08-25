@@ -1,8 +1,9 @@
 """Combined V0 feeder checker.
 
-This orchestrates the existing design-current, breaker, cable-ampacity and
-voltage-drop modules. It preserves each module's verification status instead
-of turning a numerical result into a blanket IEC-compliance claim.
+This orchestrates the design-current, breaker, cable-ampacity and voltage-drop
+modules. Numerical failures are reported as FAIL. A numerical success is only
+reported as PASS when all required engineering/standards layers used by the
+combined verdict are verified; otherwise the feeder remains NOT VERIFIED.
 """
 from dataclasses import dataclass
 from typing import Literal
@@ -17,7 +18,6 @@ OverallOutcome = Literal["PASS", "FAIL", "NOT VERIFIED"]
 
 @dataclass(frozen=True)
 class FeederInput:
-    # Load / Ib
     load_type: Literal["kw", "kva", "a"]
     load_value: float
     voltage_v: float | None
@@ -25,14 +25,8 @@ class FeederInput:
     power_factor: float | None
     demand_factor: float = 1.0
     design_margin: float | None = None
-
-    # Selected protective device
     breaker_in_a: float | None = None
-
-    # Cable / Iz
     cable: CableAmpacityInput | None = None
-
-    # Voltage-drop inputs
     length_m: float | None = None
     voltage_drop_cross_section_mm2: float | None = None
     voltage_drop_material: Literal["copper", "aluminium"] | None = None
@@ -64,6 +58,20 @@ class FeederResult:
     verification_summary: tuple[str, ...]
 
 
+def _breaker_verified_for_overall(result: BreakerComparisonResult | None) -> bool:
+    if result is None:
+        return False
+    status = result.standards_status.upper()
+    return "NOT IEC VERIFIED" not in status and "NOT VERIFIED" not in status
+
+
+def _ampacity_verified_for_overall(result: AmpacityResult | None) -> bool:
+    if result is None or result.iz_a is None:
+        return False
+    status = result.status.upper()
+    return "NOT VERIFIED" not in status
+
+
 def check_feeder(data: FeederInput) -> FeederResult:
     current = calculate_design_current(
         load_type=data.load_type,
@@ -87,6 +95,8 @@ def check_feeder(data: FeederInput) -> FeederResult:
         breaker = compare_breaker(ib_a=ib, in_a=data.breaker_in_a)
         breaker_failed = breaker.comparison == "FAIL"
         verification.append(f"Breaker: {breaker.standards_status}")
+        if not _breaker_verified_for_overall(breaker):
+            missing.append("breaker protection rule/current IEC basis")
 
     ampacity = None
     if data.cable is None:
@@ -101,11 +111,10 @@ def check_feeder(data: FeederInput) -> FeederResult:
         else:
             headroom = ampacity.iz_a - ib
             ampacity_comparison = AmpacityComparison(
-                "PASS" if ib <= ampacity.iz_a else "FAIL",
-                ib,
-                ampacity.iz_a,
-                headroom,
+                "PASS" if ib <= ampacity.iz_a else "FAIL", ib, ampacity.iz_a, headroom
             )
+            if not _ampacity_verified_for_overall(ampacity):
+                missing.append("cable ampacity standards/data basis")
 
     voltage_drop = None
     vd_failed = False
@@ -147,12 +156,14 @@ def check_feeder(data: FeederInput) -> FeederResult:
     if any_failure:
         overall: OverallOutcome = "FAIL"
     else:
-        incomplete = (
+        unresolved = (
             breaker is None
+            or not _breaker_verified_for_overall(breaker)
+            or not _ampacity_verified_for_overall(ampacity)
             or ampacity_comparison.comparison == "NOT VERIFIED"
             or (vd_required and (voltage_drop is None or vd_unverified))
         )
-        overall = "NOT VERIFIED" if incomplete else "PASS"
+        overall = "NOT VERIFIED" if unresolved else "PASS"
 
     return FeederResult(
         overall_outcome=overall,
