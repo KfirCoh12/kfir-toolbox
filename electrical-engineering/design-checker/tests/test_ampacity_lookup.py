@@ -21,26 +21,55 @@ class AmpacityLookupTests(unittest.TestCase):
         values.update(overrides)
         return CableAmpacityInput(**values)
 
-    def test_copper_95_method_e_reference_condition(self):
+    def test_copper_95_reference_condition(self):
         r = calculate_supported_iz(self._base())
         self.assertEqual(r.status, "IEC 60364-5-52:2009 BASE-EDITION VERIFIED")
         self.assertEqual(r.base_iz_a, 298.0)
         self.assertEqual(r.iz_a, 298.0)
 
-    def test_aluminium_185_reference_condition(self):
-        r = calculate_supported_iz(self._base(material="aluminium", cross_section_mm2=185))
-        self.assertEqual(r.base_iz_a, 347.0)
-        self.assertEqual(r.iz_a, 347.0)
-
     def test_ambient_temperature_correction(self):
         r = calculate_supported_iz(self._base(ambient_temperature_c=40))
         self.assertAlmostEqual(r.iz_a, 298.0 * 0.91)
 
-    def test_parallel_runs_are_not_multiplied_blindly(self):
-        r = calculate_supported_iz(self._base(parallel_runs=3, equal_current_sharing_confirmed=True))
+    def test_grouping_on_ladder(self):
+        r = calculate_supported_iz(self._base(grouped_circuits=3, grouping_arrangement="ladder_single_layer"))
+        self.assertAlmostEqual(r.iz_a, 298.0 * 0.82)
+        self.assertIn(("grouping", 0.82), r.correction_factors)
+
+    def test_grouping_requires_known_arrangement(self):
+        r = calculate_supported_iz(self._base(grouped_circuits=3))
         self.assertEqual(r.status, "NOT VERIFIED")
         self.assertIsNone(r.iz_a)
-        self.assertTrue(any("parallel-run" in x for x in r.missing_or_unsupported))
+
+    def test_three_parallel_runs_are_guarded_and_grouped(self):
+        r = calculate_supported_iz(self._base(
+            material="aluminium",
+            cross_section_mm2=185,
+            grouped_circuits=3,
+            grouping_arrangement="ladder_single_layer",
+            parallel_runs=3,
+            equal_current_sharing_confirmed=True,
+        ))
+        self.assertAlmostEqual(r.iz_a, 347.0 * 0.82 * 3)
+        self.assertTrue(any("Aggregate Iz" in line for line in r.trace))
+
+    def test_parallel_runs_without_current_sharing_confirmation_fail_safe(self):
+        r = calculate_supported_iz(self._base(
+            grouped_circuits=3,
+            grouping_arrangement="ladder_single_layer",
+            parallel_runs=3,
+        ))
+        self.assertEqual(r.status, "NOT VERIFIED")
+        self.assertIsNone(r.iz_a)
+
+    def test_parallel_runs_must_be_included_in_grouping_count(self):
+        r = calculate_supported_iz(self._base(
+            grouped_circuits=2,
+            grouping_arrangement="ladder_single_layer",
+            parallel_runs=3,
+            equal_current_sharing_confirmed=True,
+        ))
+        self.assertEqual(r.status, "NOT VERIFIED")
 
     def test_fire_rated_or_other_insulation_not_assumed_generic_xlpe(self):
         r = calculate_supported_iz(self._base(insulation="other"))

@@ -1,6 +1,5 @@
-"""V0 cable ampacity model and first narrow Iz lookup.
+"""V0 cable ampacity model and narrow IEC 60364-5-52:2009 Iz lookup.
 
-The module supports one deliberately small IEC 60364-5-52:2009 data slice.
 Unsupported conditions return NOT VERIFIED rather than being approximated.
 """
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from .ampacity_data import (
     AMBIENT_AIR_FACTOR_XLPE_EPR,
     BASE_IZ_METHOD_E_3_LOADED,
     DATASET_METADATA,
+    GROUPING_FACTOR_B5217,
 )
 
 Material = Literal["copper", "aluminium"]
@@ -29,6 +29,7 @@ class CableAmpacityInput:
     ground_temperature_c: float | None = None
     soil_thermal_resistivity_km_per_w: float | None = None
     grouped_circuits: int | None = None
+    grouping_arrangement: str | None = None
     parallel_runs: int = 1
     equal_current_sharing_confirmed: bool | None = None
     thdi_percent: float | None = None
@@ -71,10 +72,6 @@ def calculate_supported_iz(data: CableAmpacityInput) -> AmpacityResult:
         unsupported.append("V0 data slice supports air installations only")
     if data.loaded_conductors != 3:
         unsupported.append("V0 data slice supports three loaded conductors only")
-    if data.grouped_circuits not in (None, 1):
-        unsupported.append("grouping correction not implemented in this data slice")
-    if data.parallel_runs != 1:
-        unsupported.append("parallel-run aggregate Iz not implemented in this data slice")
     if data.thdi_percent is None:
         unsupported.append("thdi_percent is required to exclude unsupported harmonic treatment")
     elif data.thdi_percent > 15:
@@ -89,11 +86,34 @@ def calculate_supported_iz(data: CableAmpacityInput) -> AmpacityResult:
     if base is None:
         unsupported.append("cross-section/material combination is outside the narrow V0 dataset")
 
-    factor = None
+    ambient_factor = None
     if data.ambient_temperature_c is not None:
-        factor = AMBIENT_AIR_FACTOR_XLPE_EPR.get(float(data.ambient_temperature_c))
-        if factor is None:
+        ambient_factor = AMBIENT_AIR_FACTOR_XLPE_EPR.get(float(data.ambient_temperature_c))
+        if ambient_factor is None:
             unsupported.append("ambient temperature is outside the narrow V0 correction-factor dataset")
+
+    grouping_factor = None
+    if data.grouped_circuits is None:
+        unsupported.append("grouped_circuits must be stated explicitly")
+    elif data.grouped_circuits == 1:
+        grouping_factor = 1.0
+    else:
+        if not data.grouping_arrangement:
+            unsupported.append("grouping_arrangement is required when more than one circuit/cable is grouped")
+        else:
+            arrangement = GROUPING_FACTOR_B5217.get(data.grouping_arrangement)
+            if arrangement is None:
+                unsupported.append("grouping arrangement is outside the selected B.52.17 V0 subset")
+            else:
+                grouping_factor = arrangement.get(data.grouped_circuits)
+                if grouping_factor is None:
+                    unsupported.append("group count is outside the selected B.52.17 V0 subset")
+
+    if data.parallel_runs > 1:
+        if data.equal_current_sharing_confirmed is not True:
+            unsupported.append("parallel runs require explicit confirmation of acceptable current sharing per 523.7")
+        if data.grouped_circuits is None or data.grouped_circuits < data.parallel_runs:
+            unsupported.append("parallel runs require grouping input that includes at least all parallel cable runs")
 
     if unsupported:
         return AmpacityResult(
@@ -106,18 +126,23 @@ def calculate_supported_iz(data: CableAmpacityInput) -> AmpacityResult:
             source_metadata=DATASET_METADATA,
         )
 
-    assert base is not None and factor is not None
-    iz = base * factor
-    trace.append(f"Base Iz = {base:.3f} A from {DATASET_METADATA['standard']} Table {DATASET_METADATA['base_ampacity_tables'][data.material]}")
-    trace.append(f"Ambient-air factor = {factor:.3f} from Table {DATASET_METADATA['ambient_air_table']} at {data.ambient_temperature_c:.1f} °C")
-    trace.append(f"Corrected Iz = {base:.3f} × {factor:.3f} = {iz:.3f} A")
+    assert base is not None and ambient_factor is not None and grouping_factor is not None
+    per_run_iz = base * ambient_factor * grouping_factor
+    aggregate_iz = per_run_iz * data.parallel_runs
+
+    trace.append(f"Base Iz per run = {base:.3f} A from {DATASET_METADATA['standard']} Table {DATASET_METADATA['base_ampacity_tables'][data.material]}")
+    trace.append(f"Ambient-air factor = {ambient_factor:.3f} from Table {DATASET_METADATA['ambient_air_table']} at {data.ambient_temperature_c:.1f} °C")
+    trace.append(f"Grouping factor = {grouping_factor:.3f} from Table {DATASET_METADATA['grouping_table']} for {data.grouped_circuits} relevant circuit(s)/cable(s)")
+    trace.append(f"Corrected Iz per run = {base:.3f} × {ambient_factor:.3f} × {grouping_factor:.3f} = {per_run_iz:.3f} A")
+    if data.parallel_runs > 1:
+        trace.append(f"Aggregate Iz = {per_run_iz:.3f} × {data.parallel_runs} parallel runs = {aggregate_iz:.3f} A; current-sharing condition explicitly confirmed")
     trace.append(DATASET_METADATA["current_edition_status"])
 
     return AmpacityResult(
         status="IEC 60364-5-52:2009 BASE-EDITION VERIFIED",
-        iz_a=iz,
+        iz_a=aggregate_iz,
         base_iz_a=base,
-        correction_factors=(("ambient_air", factor),),
+        correction_factors=(("ambient_air", ambient_factor), ("grouping", grouping_factor)),
         missing_or_unsupported=tuple(),
         trace=tuple(trace),
         source_metadata=DATASET_METADATA,
