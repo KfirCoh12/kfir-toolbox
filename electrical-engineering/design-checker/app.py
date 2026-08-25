@@ -89,7 +89,7 @@ if run:
     c1.metric("Design current Ib", f"{r.current.design_current_a:.1f} A")
     c2.metric("Breaker In", f"{breaker_a:.0f} A", r.breaker.comparison if r.breaker else "Not checked")
     c3.metric("Cable Iz", f"{r.ampacity.iz_a:.1f} A" if r.ampacity and r.ampacity.iz_a is not None else "Not verified", r.ampacity_comparison.comparison)
-    c4.metric("Voltage drop", f"{r.voltage_drop.drop_percent:.2f}%" if r.voltage_drop else "Not checked", r.voltage_drop.comparison if r.voltage_drop else None)
+    c4.metric("Voltage drop", f"{r.voltage_drop.voltage_drop_percent:.2f}%" if r.voltage_drop else "Not checked", r.voltage_drop.comparison if r.voltage_drop else None)
 
     st.subheader("Verification summary")
     for item in r.verification_summary:
