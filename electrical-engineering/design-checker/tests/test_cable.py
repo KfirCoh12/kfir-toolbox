@@ -1,101 +1,68 @@
 import unittest
-from src.cable import CableAmpacityInput, validate_ampacity_inputs
+
+from src.cable import CableAmpacityInput, calculate_supported_iz
 
 
 class CableAmpacityInputTests(unittest.TestCase):
-    def test_missing_conditions_are_not_guessed(self):
-        data = CableAmpacityInput(
+    def _base(self, **overrides):
+        values = dict(
             material="copper",
             cross_section_mm2=95,
             insulation="xlpe_epr",
             loaded_conductors=3,
-            installation_method=None,
-            environment="air",
-        )
-        r = validate_ampacity_inputs(data)
-        self.assertFalse(r.ready_for_iz_lookup)
-        self.assertIn("installation_method", r.missing_or_unverified)
-        self.assertIn("ambient_temperature_c", r.missing_or_unverified)
-        self.assertIn("cable_data_source", r.missing_or_unverified)
-        self.assertEqual(r.standards_status, "NOT VERIFIED")
-
-    def test_complete_single_run_air_case_is_ready_for_lookup(self):
-        data = CableAmpacityInput(
-            material="copper",
-            cross_section_mm2=95,
-            insulation="xlpe_epr",
-            loaded_conductors=3,
-            installation_method="C",
+            installation_method="E",
             environment="air",
             ambient_temperature_c=30,
             grouped_circuits=1,
+            grouping_arrangement=None,
             parallel_runs=1,
-            thdi_percent=5,
-            neutral_loaded=False,
-            cable_data_source="IEC 60364-5-52:2009 Ed.3.0",
-            source_table_or_method="Annex B applicable table",
-        )
-        r = validate_ampacity_inputs(data)
-        self.assertTrue(r.ready_for_iz_lookup)
-        self.assertEqual(r.missing_or_unverified, ())
-        self.assertEqual(r.standards_status, "CALCULATED INPUTS READY — IZ NOT YET IMPLEMENTED")
-
-    def test_parallel_runs_require_current_sharing_confirmation(self):
-        data = CableAmpacityInput(
-            material="aluminium",
-            cross_section_mm2=240,
-            insulation="xlpe_epr",
-            loaded_conductors=3,
-            installation_method="F",
-            environment="air",
-            ambient_temperature_c=30,
-            grouped_circuits=3,
-            parallel_runs=3,
-            equal_current_sharing_confirmed=False,
-            thdi_percent=5,
-            neutral_loaded=False,
-            cable_data_source="IEC 60364-5-52:2009 Ed.3.0",
-            source_table_or_method="Annex B applicable table",
-        )
-        r = validate_ampacity_inputs(data)
-        self.assertFalse(r.ready_for_iz_lookup)
-        self.assertIn("equal_current_sharing_confirmed", r.missing_or_unverified)
-
-    def test_ground_case_requires_ground_conditions(self):
-        data = CableAmpacityInput(
-            material="aluminium",
-            cross_section_mm2=185,
-            insulation="xlpe_epr",
-            loaded_conductors=3,
-            installation_method="D",
-            environment="ground",
-            grouped_circuits=1,
+            equal_current_sharing_confirmed=None,
             thdi_percent=0,
             neutral_loaded=False,
-            cable_data_source="IEC 60364-5-52:2009 Ed.3.0",
-            source_table_or_method="Annex B applicable table",
         )
-        r = validate_ampacity_inputs(data)
-        self.assertIn("ground_temperature_c", r.missing_or_unverified)
-        self.assertIn("soil_thermal_resistivity_km_per_w", r.missing_or_unverified)
+        values.update(overrides)
+        return CableAmpacityInput(**values)
 
-    def test_high_thdi_is_flagged(self):
-        data = CableAmpacityInput(
-            material="copper",
-            cross_section_mm2=50,
-            insulation="pvc",
-            loaded_conductors=3,
-            installation_method="C",
-            environment="air",
-            ambient_temperature_c=30,
-            grouped_circuits=1,
-            thdi_percent=20,
-            neutral_loaded=True,
-            cable_data_source="IEC 60364-5-52:2009 Ed.3.0",
-            source_table_or_method="Annex B + Annex E",
+    def test_supported_reference_case_returns_verified_iz(self):
+        result = calculate_supported_iz(self._base())
+        self.assertEqual(result.iz_a, 298.0)
+        self.assertEqual(result.missing_or_unsupported, ())
+        self.assertIn("IEC 60364-5-52:2009", result.status)
+
+    def test_missing_ambient_condition_is_not_guessed(self):
+        result = calculate_supported_iz(self._base(ambient_temperature_c=None))
+        self.assertIsNone(result.iz_a)
+        self.assertIn("ambient_temperature_c is required", result.missing_or_unsupported)
+
+    def test_parallel_runs_require_current_sharing_confirmation(self):
+        result = calculate_supported_iz(
+            self._base(
+                parallel_runs=3,
+                grouped_circuits=3,
+                grouping_arrangement="ladder",
+                equal_current_sharing_confirmed=False,
+            )
         )
-        r = validate_ampacity_inputs(data)
-        self.assertTrue(any("THDi exceeds 15%" in note for note in r.notes))
+        self.assertIsNone(result.iz_a)
+        self.assertTrue(any("current sharing" in item for item in result.missing_or_unsupported))
+
+    def test_ground_installation_is_outside_current_v0_slice(self):
+        result = calculate_supported_iz(
+            self._base(
+                environment="ground",
+                installation_method="D",
+                ambient_temperature_c=None,
+                ground_temperature_c=20,
+                soil_thermal_resistivity_km_per_w=2.5,
+            )
+        )
+        self.assertIsNone(result.iz_a)
+        self.assertTrue(any("air installations only" in item for item in result.missing_or_unsupported))
+
+    def test_high_thdi_is_flagged_not_approximated(self):
+        result = calculate_supported_iz(self._base(thdi_percent=20, neutral_loaded=True))
+        self.assertIsNone(result.iz_a)
+        self.assertTrue(any("THDi > 15%" in item for item in result.missing_or_unsupported))
 
 
 if __name__ == "__main__":

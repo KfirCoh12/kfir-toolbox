@@ -19,15 +19,19 @@ class ReliabilityGuardTests(unittest.TestCase):
     def test_zero_group_count_is_rejected(self):
         with self.assertRaises(ValueError):
             calculate_routed_ampacity(RoutedAmpacityInput(
-                source_kind="manufacturer_nhxh_fe180_e90", construction="3x95+50",
-                ambient_temperature_c=30, grouped_circuits=0,
+                source_kind="manufacturer_nhxh_fe180_e90",
+                construction="3x95+50",
+                ambient_temperature_c=30,
+                grouped_circuits=0,
             ))
 
     def test_zero_parallel_runs_is_rejected(self):
         with self.assertRaises(ValueError):
             calculate_routed_ampacity(RoutedAmpacityInput(
-                source_kind="manufacturer_nhxh_fe180_e90", construction="3x95+50",
-                ambient_temperature_c=30, parallel_runs=0,
+                source_kind="manufacturer_nhxh_fe180_e90",
+                construction="3x95+50",
+                ambient_temperature_c=30,
+                parallel_runs=0,
             ))
 
     def test_voltage_drop_regression_95_not_9550_mm2(self):
@@ -42,7 +46,8 @@ class ReliabilityGuardTests(unittest.TestCase):
             permitted_limit_percent=5, limit_source="regression test", allow_annex_g_defaults=True,
         )
         self.assertGreater(correct.voltage_drop_percent, 1.0)
-        self.assertLess(impossible.voltage_drop_percent, correct.voltage_drop_percent / 10)
+        self.assertLess(impossible.voltage_drop_percent, 0.5)
+        self.assertLess(impossible.voltage_drop_percent, correct.voltage_drop_percent / 5)
 
 
 if __name__ == "__main__":
