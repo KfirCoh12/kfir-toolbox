@@ -1,8 +1,7 @@
 """Route cable ampacity lookups by evidence source.
 
-Generic IEC table data and manufacturer-specific cable data must remain
-separate. This facade provides one controlled entry point without mixing their
-provenance or verification wording.
+Generic IEC table data and manufacturer-specific cable data remain separate.
+Unsupported conditions return NOT VERIFIED rather than being approximated.
 """
 from dataclasses import dataclass
 from typing import Literal
@@ -25,15 +24,16 @@ class RoutedAmpacityInput:
 
 
 def calculate_routed_ampacity(data: RoutedAmpacityInput) -> AmpacityResult:
+    if data.grouped_circuits <= 0:
+        raise ValueError("grouped_circuits must be greater than 0")
+    if data.parallel_runs <= 0:
+        raise ValueError("parallel_runs must be greater than 0")
+
     if data.source_kind == "iec_generic":
         if data.generic is None:
             return AmpacityResult(
-                status="NOT VERIFIED",
-                iz_a=None,
-                base_iz_a=None,
-                correction_factors=tuple(),
-                missing_or_unsupported=("generic IEC cable input is required",),
-                trace=tuple(),
+                status="NOT VERIFIED", iz_a=None, base_iz_a=None, correction_factors=tuple(),
+                missing_or_unsupported=("generic IEC cable input is required",), trace=tuple(),
                 source_metadata={"source_kind": "iec_generic"},
             )
         return calculate_supported_iz(data.generic)
@@ -57,41 +57,29 @@ def calculate_routed_ampacity(data: RoutedAmpacityInput) -> AmpacityResult:
 
         if missing:
             return AmpacityResult(
-                status="NOT VERIFIED",
-                iz_a=None,
+                status="NOT VERIFIED", iz_a=None,
                 base_iz_a=record.current_capacity_air_a if record else None,
-                correction_factors=tuple(),
-                missing_or_unsupported=tuple(missing),
+                correction_factors=tuple(), missing_or_unsupported=tuple(missing),
                 trace=("Manufacturer source selected; V0 refuses to apply unsourced correction factors.",),
-                source_metadata={
-                    "source_kind": "manufacturer",
-                    "family": "NHXH FE180/E90",
-                    "construction": data.construction,
-                },
+                source_metadata={"source_kind": "manufacturer", "family": "NHXH FE180/E90", "construction": data.construction},
             )
 
         assert record is not None
         return AmpacityResult(
             status="MANUFACTURER DATA VERIFIED — INSTALLATION CONDITIONS LIMITED",
-            iz_a=record.current_capacity_air_a,
-            base_iz_a=record.current_capacity_air_a,
-            correction_factors=tuple(),
-            missing_or_unsupported=tuple(),
+            iz_a=record.current_capacity_air_a, base_iz_a=record.current_capacity_air_a,
+            correction_factors=tuple(), missing_or_unsupported=tuple(),
             trace=(
                 f"Manufacturer base Iz = {record.current_capacity_air_a:.1f} A for {record.construction} in air at 30 °C.",
+                f"Phase conductor section = {record.phase_conductor_mm2:.1f} mm².",
                 f"Ampacity basis: {record.ampacity_basis}.",
-                f"Primary source: {record.primary_source}.",
-                record.e90_note,
+                f"Primary source: {record.primary_source}.", record.e90_note,
             ),
             source_metadata={
-                "source_kind": "manufacturer",
-                "family": record.family,
-                "construction": record.construction,
-                "ambient_c": record.ambient_c,
-                "ampacity_basis": record.ampacity_basis,
-                "primary_source": record.primary_source,
-                "cross_check_source": record.cross_check_source,
-                "fire_performance_basis": record.fire_performance_basis,
+                "source_kind": "manufacturer", "family": record.family, "construction": record.construction,
+                "phase_conductor_mm2": record.phase_conductor_mm2, "ambient_c": record.ambient_c,
+                "ampacity_basis": record.ampacity_basis, "primary_source": record.primary_source,
+                "cross_check_source": record.cross_check_source, "fire_performance_basis": record.fire_performance_basis,
             },
         )
 
