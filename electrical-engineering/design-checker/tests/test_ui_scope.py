@@ -11,16 +11,24 @@ class UIScopeTests(unittest.TestCase):
         self.assertNotIn('"Check an existing supply"', self.text)
         self.assertNotIn('"Find maximum load"', self.text)
 
-    def test_existing_capacity_starts_from_hardware_not_trial_load(self):
+    def test_existing_capacity_accepts_independent_known_components(self):
         section=self.text.split('st.subheader("Existing supply capacity")',1)[1]
-        self.assertIn('Existing breaker rating In (A)', section)
-        self.assertIn('source_inputs("cap_")', section)
+        self.assertIn('I have a breaker rating', section)
+        self.assertIn('I have an existing cable', section)
+        self.assertIn('I have an outlet / connection rating', section)
+        self.assertIn('if not (use_breaker or use_cable or use_connection):', section)
+        self.assertIn('breaker_in_a=breaker if use_breaker else None', section)
+        self.assertIn('ampacity_route=route if use_cable else None', section)
+        self.assertIn('connection_option_id=connection_option_id if use_connection else None', section)
+
+    def test_existing_capacity_has_no_trial_load_input(self):
+        section=self.text.split('st.subheader("Existing supply capacity")',1)[1]
         self.assertNotIn('Consumer load (kW)', section)
         self.assertIn('Maximum active load', section)
-        self.assertIn('Limiting factor', section)
+        self.assertIn('Still needs verification', section)
 
     def test_design_advanced_cable_conditions_do_not_surface_temperature_input(self):
-        design=self.text.split('if mode == "Design a supply":',1)[1].split('st.subheader("Existing supply capacity")',1)[0]
+        design=self.text.split('if mode == "Design a supply":',1)[1].split('else:\n    st.subheader("Existing supply capacity")',1)[0]
         self.assertIn('with st.expander("Advanced cable conditions")', design)
         self.assertIn('Number of grouped circuits / cables', design)
         self.assertNotIn('st.selectbox("Ambient air temperature', design)
