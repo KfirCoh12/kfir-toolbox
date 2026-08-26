@@ -1,4 +1,4 @@
-"""Conservative V0.5 automatic circuit selection over explicitly supported data."""
+"""Conservative V0.6 automatic circuit selection over explicitly supported data."""
 from dataclasses import dataclass
 from typing import Literal
 
@@ -51,10 +51,10 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
     limitations = ["Breaker candidate is a conventional rating suggestion only; IEC 60364-4-43 protection verification is not yet implemented."]
     trace = [f"Design current Ib = {ib:.3f} A"]
     if breaker is None:
-        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.5 set is >= Ib."]))
+        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.6 set is >= Ib."]))
     trace.append(f"First declared breaker candidate >= Ib: {breaker:.0f} A")
     connection = suggest_connection(phase=data.phase, required_current_a=breaker)
-    limitations.append("Connection suggestion uses a conventional nominal-rating catalogue only; exact product and applicable connection standard are not yet verified.")
+    limitations.append(f"Connection evidence: {connection.evidence_status}. Exact accessory configuration and product compliance remain to be verified.")
     trace.append(f"Connection suggestion for {breaker:.0f} A requirement: {connection.label}")
     if data.phase != "three":
         limitations.append("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.")
@@ -77,4 +77,4 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
         trace.append(f"Selected first supported cable candidate: {size:g} mm², Iz = {amp.iz_a:.1f} A")
         return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
 
-    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.5 dataset passed all requested checks."]))
+    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.6 dataset passed all requested checks."]))

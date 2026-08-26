@@ -1,4 +1,4 @@
-"""Reverse V0.5 solver: existing circuit -> maximum supported load."""
+"""Reverse V0.6 solver: existing circuit -> maximum supported load."""
 from dataclasses import dataclass
 from math import sqrt
 from typing import Literal
@@ -42,30 +42,27 @@ class MaxLoadResult:
     limitations: tuple[str, ...]
     trace: tuple[str, ...]
 
-def _positive(name: str, value: float) -> None:
+def _positive(name, value):
     if value <= 0: raise ValueError(f"{name} must be greater than 0")
-
-def _kw_from_current(i, v, phase, pf): return (sqrt(3) if phase == "three" else 1.0) * v * i * pf / 1000.0
-def _kva_from_current(i, v, phase): return (sqrt(3) if phase == "three" else 1.0) * v * i / 1000.0
+def _kw_from_current(i,v,phase,pf): return (sqrt(3) if phase=="three" else 1.0)*v*i*pf/1000.0
+def _kva_from_current(i,v,phase): return (sqrt(3) if phase=="three" else 1.0)*v*i/1000.0
 
 def calculate_max_load(data: MaxLoadInput) -> MaxLoadResult:
-    _positive("voltage_v", data.voltage_v)
+    _positive("voltage_v",data.voltage_v)
     if not 0 < data.power_factor <= 1: raise ValueError("power_factor must be greater than 0 and at most 1")
-    if data.connection_rating_a is not None and data.connection_option_id is not None:
-        raise ValueError("Supply either connection_rating_a or connection_option_id, not both")
+    if data.connection_rating_a is not None and data.connection_option_id is not None: raise ValueError("Supply either connection_rating_a or connection_option_id, not both")
     limits=[]; limitations=[]; trace=[]
     if data.breaker_in_a is not None:
-        _positive("breaker_in_a", data.breaker_in_a); limits.append(ConstraintLimit("breaker",data.breaker_in_a,f"Selected breaker rating In = {data.breaker_in_a:.1f} A")); limitations.append("Breaker rating is treated as a numerical ceiling only; current IEC 60364-4-43 protection verification is not yet implemented.")
+        _positive("breaker_in_a",data.breaker_in_a); limits.append(ConstraintLimit("breaker",data.breaker_in_a,f"Selected breaker rating In = {data.breaker_in_a:.1f} A")); limitations.append("Breaker rating is treated as a numerical ceiling only; current IEC 60364-4-43 protection verification is not yet implemented.")
     if data.connection_option_id is not None:
         option=get_connection_option(data.connection_option_id)
         if option.phase != data.phase: raise ValueError("Selected connection option phase does not match the supply phase")
-        limitations.append("Selected connection comes from the conventional nominal-rating catalogue; exact product and applicable connection standard are not yet verified.")
+        limitations.append(f"Connection evidence: {option.evidence_status}. Exact accessory configuration and product compliance remain to be verified.")
         if option.rating_a is not None:
             limits.append(ConstraintLimit("connection/outlet",option.rating_a,f"{option.label} nominal rating = {option.rating_a:.1f} A"))
-        else:
-            trace.append(f"{option.label}: no generic current ceiling assigned; not used as a numerical limit.")
+        else: trace.append(f"{option.label}: no generic current ceiling assigned; not used as a numerical limit.")
     elif data.connection_rating_a is not None:
-        _positive("connection_rating_a", data.connection_rating_a); limits.append(ConstraintLimit("connection/outlet",data.connection_rating_a,f"User-supplied connection/outlet rating = {data.connection_rating_a:.1f} A")); limitations.append("Connection/outlet rating is user-supplied; product/standard-specific suitability is not independently verified in V0.5.")
+        _positive("connection_rating_a",data.connection_rating_a); limits.append(ConstraintLimit("connection/outlet",data.connection_rating_a,f"User-supplied connection/outlet rating = {data.connection_rating_a:.1f} A")); limitations.append("Connection/outlet rating is user-supplied; product/standard-specific suitability is not independently verified.")
     if data.ampacity_route is not None:
         amp=calculate_routed_ampacity(data.ampacity_route)
         if amp.iz_a is None: limitations.extend(amp.missing_or_unsupported); trace.append("Cable ampacity could not be verified for the supplied conditions.")
