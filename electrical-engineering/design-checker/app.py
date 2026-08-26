@@ -293,7 +293,7 @@ if run:
     s2.metric(
         "Standards verification",
         standards_status,
-        f"{len(r.missing_or_unverified)} open item(s)" if r.missing_or_unverified else None,
+        f"{summary.open_item_count} open item(s)" if summary.open_item_count else None,
     )
 
     if summary.primary_message:
@@ -318,19 +318,19 @@ if run:
         )
     with c2:
         st.markdown(
-            f'<div class="result-card"><div class="result-label">Breaker · In</div><div class="result-value">{breaker_a:.0f} A</div><div class="status-line">{breaker_status}</div></div>',
+            f'<div class="result-card"><div class="result-label">Breaker · In</div><div class="result-value">{breaker_a:.0f} A</div><div class="status-line">{summary.breaker_detail}</div></div>',
             unsafe_allow_html=True,
         )
     with c3:
         iz_text = f"{r.ampacity.iz_a:.1f} A" if r.ampacity and r.ampacity.iz_a is not None else "—"
         st.markdown(
-            f'<div class="result-card"><div class="result-label">Cable capacity · Iz</div><div class="result-value">{iz_text}</div><div class="status-line">{ampacity_status}</div></div>',
+            f'<div class="result-card"><div class="result-label">Cable capacity · Iz</div><div class="result-value">{iz_text}</div><div class="status-line">{summary.cable_detail}</div></div>',
             unsafe_allow_html=True,
         )
     with c4:
         vd_text = f"{r.voltage_drop.voltage_drop_percent:.2f}%" if r.voltage_drop else "—"
         st.markdown(
-            f'<div class="result-card"><div class="result-label">Voltage drop</div><div class="result-value">{vd_text}</div><div class="status-line">{vd_status}</div></div>',
+            f'<div class="result-card"><div class="result-label">Voltage drop</div><div class="result-value">{vd_text}</div><div class="status-line">{summary.voltage_drop_detail or "Not requested"}</div></div>',
             unsafe_allow_html=True,
         )
 

@@ -66,6 +66,32 @@ class ResultStatusTests(unittest.TestCase):
         s = summarize_feeder_result(r, voltage_drop_requested=False)
         self.assertEqual(s.open_item_count, len(r.missing_or_unverified))
 
+    def test_summary_exposes_actionable_headroom_details(self):
+        r = check_feeder(self._feeder(
+            length_m=100, voltage_drop_cross_section_mm2=95, voltage_drop_material="copper",
+            permitted_voltage_drop_percent=5.0, voltage_drop_limit_source="project criterion",
+            allow_annex_g_defaults=True,
+        ))
+        s = summarize_feeder_result(r, voltage_drop_requested=True)
+        self.assertIn("numerical headroom", s.breaker_detail)
+        self.assertIn("ampacity headroom", s.cable_detail)
+        self.assertIn("percentage points remaining", s.voltage_drop_detail)
+
+    def test_failed_breaker_detail_states_deficit_without_guessing_replacement(self):
+        r = check_feeder(self._feeder(breaker_in_a=100))
+        s = summarize_feeder_result(r, voltage_drop_requested=False)
+        self.assertIn("Ib exceeds In", s.breaker_detail)
+        self.assertIn("revise", s.breaker_detail)
+        self.assertNotIn("125 A", s.breaker_detail)
+
+    def test_voltage_drop_without_limit_is_explicit(self):
+        r = check_feeder(self._feeder(
+            length_m=100, voltage_drop_cross_section_mm2=95, voltage_drop_material="copper",
+            allow_annex_g_defaults=True,
+        ))
+        s = summarize_feeder_result(r, voltage_drop_requested=True)
+        self.assertIn("no verified permitted limit", s.voltage_drop_detail)
+
 
 if __name__ == "__main__":
     unittest.main()
