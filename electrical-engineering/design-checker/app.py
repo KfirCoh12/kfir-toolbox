@@ -4,6 +4,7 @@ import streamlit as st
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
 from src.circuit_selector import CircuitSelectionInput, select_circuit
+from src.connection import connection_options_for_phase
 from src.feeder import FeederInput, check_feeder
 from src.manufacturer_ampacity import get_nhxh_phase_conductor_mm2
 from src.max_load import MaxLoadInput, calculate_max_load
@@ -31,7 +32,7 @@ div.stButton > button {min-height:3rem; border-radius:12px; font-weight:700;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="hero"><div class="eyebrow">Electrical engineering · V0.4</div><h1>⚡ Electrical Design Checker</h1><p>Size a new supply, check an existing circuit, or find the maximum load an existing circuit can support.</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="hero"><div class="eyebrow">Electrical engineering · V0.5</div><h1>⚡ Electrical Design Checker</h1><p>Size a new supply, check an existing circuit, or find the maximum load an existing circuit can support.</p></div>""", unsafe_allow_html=True)
 
 mode = st.radio(
     "What do you want to do?",
@@ -103,11 +104,14 @@ if mode == "Design a supply":
         if r.status == "SUGGESTION": st.success("A supported numerical supply suggestion was found.")
         elif r.status == "NO SUPPORTED SOLUTION": st.error("No solution was found inside the current supported dataset.")
         else: st.warning("A complete automatic suggestion is not verified for these inputs.")
-        c1,c2,c3,c4 = st.columns(4)
+        c1,c2,c3,c4,c5 = st.columns(5)
         c1.metric("Design current · Ib", f"{r.current.design_current_a:.1f} A")
         c2.metric("Suggested breaker", f"{r.suggested_breaker_a:.0f} A" if r.suggested_breaker_a else "—")
         c3.metric("Suggested cable", f"{r.suggested_cable_mm2:g} mm²" if r.suggested_cable_mm2 else "—")
         c4.metric("Cable capacity · Iz", f"{r.cable_iz_a:.1f} A" if r.cable_iz_a else "—")
+        c5.metric("Connection", f"{r.suggested_connection.rating_a:.0f} A" if r.suggested_connection and r.suggested_connection.rating_a else "Fixed")
+        if r.suggested_connection:
+            st.info(f"Suggested connection class: **{r.suggested_connection.label}**. Product and applicable connection standard are not yet verified.")
         if r.voltage_drop: st.info(f"Voltage drop: {r.voltage_drop.voltage_drop_percent:.2f}% · {r.voltage_drop.comparison}")
         if r.limitations:
             st.subheader("Important limitations")
@@ -133,8 +137,18 @@ elif mode == "Find maximum load":
         st.header("Known limits")
         use_breaker = st.checkbox("Breaker rating known", value=True)
         breaker = st.number_input("Breaker rating In (A)", min_value=1.0, value=63.0, step=1.0, disabled=not use_breaker)
-        use_connection = st.checkbox("Outlet / connection rating known", value=False)
-        connection = st.number_input("Outlet / connection rating (A)", min_value=1.0, value=32.0, step=1.0, disabled=not use_connection)
+        use_connection = st.checkbox("Outlet / connection known", value=False)
+        connection_option_id = None
+        connection = None
+        if use_connection:
+            connection_mode = st.radio("Connection input", ["Choose connection type", "Enter custom rating"], horizontal=False, key="ml_conn_mode")
+            if connection_mode == "Choose connection type":
+                options = connection_options_for_phase(phase, include_fixed=True)
+                option_labels = {x.label: x.id for x in options}
+                selected_label = st.selectbox("Outlet / connection type", list(option_labels.keys()), key="ml_conn_type")
+                connection_option_id = option_labels[selected_label]
+            else:
+                connection = st.number_input("Outlet / connection rating (A)", min_value=1.0, value=32.0, step=1.0)
         use_cable = st.checkbox("Cable known", value=True)
         if use_cable:
             _, material, size, route, _ = source_inputs("ml_")
@@ -148,7 +162,7 @@ elif mode == "Find maximum load":
         annex = st.checkbox("Use IEC Annex G fallback impedance assumptions", value=True, disabled=not use_vd, key="ml_annex")
     if st.button("Find maximum load", type="primary", use_container_width=True):
         try:
-            r=calculate_max_load(MaxLoadInput(voltage_v=voltage,phase=phase,power_factor=pf,breaker_in_a=breaker if use_breaker else None,connection_rating_a=connection if use_connection else None,ampacity_route=route if use_cable else None,length_m=length if use_vd else None,voltage_drop_cross_section_mm2=size if use_vd and use_cable else None,voltage_drop_material=material if use_vd and use_cable else None,permitted_voltage_drop_percent=vd_limit if use_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if use_vd else None,allow_annex_g_defaults=annex if use_vd else False))
+            r=calculate_max_load(MaxLoadInput(voltage_v=voltage,phase=phase,power_factor=pf,breaker_in_a=breaker if use_breaker else None,connection_rating_a=connection if use_connection and connection_option_id is None else None,connection_option_id=connection_option_id if use_connection else None,ampacity_route=route if use_cable else None,length_m=length if use_vd else None,voltage_drop_cross_section_mm2=size if use_vd and use_cable else None,voltage_drop_material=material if use_vd and use_cable else None,permitted_voltage_drop_percent=vd_limit if use_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if use_vd else None,allow_annex_g_defaults=annex if use_vd else False))
         except ValueError as exc:
             st.error(str(exc)); st.stop()
         if r.status == "RESULT": st.success(f"Limiting factor: {r.limiting_constraint}")
@@ -221,4 +235,4 @@ else:
     else:
         st.info("Enter the existing feeder details in the sidebar, then press **Check supply**.")
 
-st.caption("V0.4 intentionally keeps unsupported conditions unverified rather than silently estimating them. Suggestions are engineering aids, not substitutes for project-specific design review.")
+st.caption("V0.5 intentionally keeps unsupported conditions unverified rather than silently estimating them. Suggestions are engineering aids, not substitutes for project-specific design review.")
