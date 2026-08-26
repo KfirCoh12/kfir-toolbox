@@ -32,4 +32,19 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(len(IEC_60309_SOURCES),2)
         self.assertTrue(any("2026" in s.standard for s in IEC_60309_SOURCES))
 
+    def test_400v_3pe_configuration_is_red_6h_four_pole_family(self):
+        from src.connection import iec60309_400v_configuration
+        c=iec60309_400v_configuration(requires_neutral=False)
+        self.assertEqual(c.poles,"3P+E")
+        self.assertEqual(c.clock_position_h,6)
+        self.assertEqual(c.identification_colour,"red")
+        self.assertIn("380/415",c.voltage_range_v)
+
+    def test_400v_3pne_configuration_is_red_6h_five_pole_family(self):
+        from src.connection import iec60309_400v_configuration
+        c=iec60309_400v_configuration(requires_neutral=True)
+        self.assertEqual(c.poles,"3P+N+E")
+        self.assertEqual(c.clock_position_h,6)
+        self.assertTrue(any("Legrand" in s.title for s in c.evidence_sources))
+
 if __name__=="__main__": unittest.main()

@@ -33,3 +33,19 @@ Therefore the tool may use an IEC 60309 nominal rating as a numerical connection
 
 - https://webstore.iec.ch/en/publication/59916
 - https://webstore.iec.ch/en/publication/59919
+
+## V0.7 — common 380/415 V three-phase configuration mapping
+
+For the common IEC 60309 380/415 V AC, 50/60 Hz family, V0.7 can now distinguish two three-phase conductor arrangements when the neutral requirement is known:
+
+- `3P+E` (4 poles) — no neutral required.
+- `3P+N+E` (5 poles) — neutral required.
+
+Both are represented as red, 6 h, 50/60 Hz configurations. This mapping is cross-checked against current Legrand IEC 60309 product data for 380/415 V accessories. The manufacturer's pages explicitly identify red 6 h 400 V / 50+60 Hz products in both 3P+E and 3P+N+E arrangements.
+
+This still does **not** choose IP44 vs IP67, switched/interlocked construction, mounting style, terminal type, or an exact catalogue number. Those remain product/project choices.
+
+Manufacturer evidence used for this configuration mapping:
+
+- Legrand Hypra 380/415 V 16 A 3P+E product page: https://www.legrand.com/ecatalogue/en/catalog/products/panel-appliance-inlet-hypra-ip-44-380415-v-16-a-3pe-metal-052163
+- Legrand P17 380/415 V 16 A 3P+N+E product page: https://www.legrand.com/ecatalogue/en/catalog/products/panel-mounting-socket-p17-ip6667-380415-v-16-3pne-555389

@@ -4,7 +4,7 @@ import streamlit as st
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
 from src.circuit_selector import CircuitSelectionInput, select_circuit
-from src.connection import connection_options_for_phase
+from src.connection import connection_options_for_phase, iec60309_400v_configuration
 from src.feeder import FeederInput, check_feeder
 from src.manufacturer_ampacity import get_nhxh_phase_conductor_mm2
 from src.max_load import MaxLoadInput, calculate_max_load
@@ -83,6 +83,8 @@ if mode == "Design a supply":
         demand = st.number_input("Usage / demand factor", min_value=0.01, max_value=1.0, value=0.80, step=0.05)
         voltage = st.number_input("System voltage (V)", min_value=1.0, value=400.0, step=10.0)
         pf = st.number_input("Power factor", min_value=0.01, max_value=1.0, value=0.90, step=0.01)
+        st.header("Connection")
+        neutral_required = st.selectbox("IEC 60309 conductors", ["3P+N+E (neutral required)", "3P+E (no neutral)"]) == "3P+N+E (neutral required)"
         st.header("Installation")
         material = st.selectbox("Conductor material", ["copper", "aluminium"])
         ambient = st.selectbox("Ambient air temperature (°C)", [20,25,30,35,40,45,50], index=2)
@@ -98,7 +100,7 @@ if mode == "Design a supply":
         annex = st.checkbox("Use IEC Annex G fallback impedance assumptions", value=True, disabled=not check_vd)
     if st.button("Suggest supply", type="primary", use_container_width=True):
         try:
-            r = select_circuit(CircuitSelectionInput(load_type="kw",load_value=load_kw,voltage_v=voltage,phase="three",power_factor=pf,demand_factor=demand,material=material,ambient_temperature_c=ambient,grouped_circuits=grouped,grouping_arrangement=arrangement,length_m=length if check_vd else None,permitted_voltage_drop_percent=vd_limit if check_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if check_vd else None,allow_annex_g_defaults=annex if check_vd else False))
+            r = select_circuit(CircuitSelectionInput(load_type="kw",load_value=load_kw,voltage_v=voltage,phase="three",power_factor=pf,demand_factor=demand,material=material,ambient_temperature_c=ambient,grouped_circuits=grouped,grouping_arrangement=arrangement,length_m=length if check_vd else None,permitted_voltage_drop_percent=vd_limit if check_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if check_vd else None,allow_annex_g_defaults=annex if check_vd else False,connection_requires_neutral=neutral_required))
         except ValueError as exc:
             st.error(str(exc)); st.stop()
         if r.status == "SUGGESTION": st.success("A supported numerical supply suggestion was found.")
@@ -111,7 +113,11 @@ if mode == "Design a supply":
         c4.metric("Cable capacity · Iz", f"{r.cable_iz_a:.1f} A" if r.cable_iz_a else "—")
         c5.metric("Connection", f"{r.suggested_connection.rating_a:.0f} A" if r.suggested_connection and r.suggested_connection.rating_a else "Fixed")
         if r.suggested_connection:
-            st.info(f"Suggested connection class: **{r.suggested_connection.label}**. Product and applicable connection standard are not yet verified.")
+            if r.suggested_connection_configuration:
+                cfg=r.suggested_connection_configuration
+                st.info(f"Suggested connection: **IEC 60309 · {r.suggested_connection.rating_a:.0f} A · {cfg.label}**. Rating/configuration evidence is mapped; exact product, IP degree and interlocking still require selection.")
+            else:
+                st.info(f"Suggested connection class: **{r.suggested_connection.label}**. Exact accessory configuration/product remains to be verified.")
         if r.voltage_drop: st.info(f"Voltage drop: {r.voltage_drop.voltage_drop_percent:.2f}% · {r.voltage_drop.comparison}")
         if r.limitations:
             st.subheader("Important limitations")
@@ -201,6 +207,8 @@ else:
         ck_connection = None if ck_connection_label == "Not specified" else next(x for x in ck_connection_options if x.label == ck_connection_label)
         if ck_connection is not None:
             st.caption(ck_connection.note)
+            if ck_connection.category == "industrial_socket" and 380 <= voltage <= 415:
+                st.caption("IEC 60309 380/415 V family: common three-phase configurations are 3P+E or 3P+N+E, red, 6h, 50/60 Hz. Exact pole arrangement must match the load.")
         st.header("Cable")
         _, material, size, route, cable = source_inputs("ck_")
         st.header("Voltage drop")
