@@ -6,6 +6,7 @@ from .ampacity_router import RoutedAmpacityInput, calculate_routed_ampacity
 from .breaker import BreakerComparisonResult, compare_breaker
 from .cable import AmpacityResult, CableAmpacityInput
 from .current import CurrentResult, calculate_design_current
+from .connection import ConnectionOption, get_connection_option
 from .voltage_drop import VoltageDropResult, calculate_voltage_drop
 
 OverallOutcome = Literal["PASS", "FAIL", "NOT VERIFIED"]
@@ -20,6 +21,7 @@ class FeederInput:
     demand_factor: float = 1.0
     design_margin: float | None = None
     breaker_in_a: float | None = None
+    connection_option_id: str | None = None
     cable: CableAmpacityInput | None = None
     ampacity_route: RoutedAmpacityInput | None = None
     length_m: float | None = None
@@ -39,11 +41,22 @@ class AmpacityComparison:
     iz_a: float | None
     headroom_a: float | None
 
+
+@dataclass(frozen=True)
+class ConnectionComparison:
+    comparison: Literal["PASS", "FAIL", "NOT VERIFIED"]
+    option: ConnectionOption | None
+    ib_a: float
+    rating_a: float | None
+    headroom_a: float | None
+    detail: str
+
 @dataclass(frozen=True)
 class FeederResult:
     overall_outcome: OverallOutcome
     current: CurrentResult
     breaker: BreakerComparisonResult | None
+    connection: ConnectionComparison
     ampacity: AmpacityResult | None
     ampacity_comparison: AmpacityComparison
     voltage_drop: VoltageDropResult | None
@@ -68,6 +81,20 @@ def check_feeder(data: FeederInput) -> FeederResult:
         breaker=compare_breaker(ib_a=ib,in_a=data.breaker_in_a); breaker_failed=breaker.comparison=="FAIL"
         verification.append(f"Breaker: {breaker.standards_status}")
         if not _breaker_verified_for_overall(breaker): missing.append("breaker protection rule/current IEC basis")
+    if data.connection_option_id is None:
+        connection=ConnectionComparison("NOT VERIFIED",None,ib,None,None,"Connection/outlet not checked.")
+    else:
+        option=get_connection_option(data.connection_option_id)
+        if data.phase is not None and option.phase != data.phase:
+            connection=ConnectionComparison("FAIL",option,ib,option.rating_a,None,f"Selected connection is {option.phase}-phase but feeder is {data.phase}-phase.")
+        elif option.rating_a is None:
+            connection=ConnectionComparison("NOT VERIFIED",option,ib,None,None,"Fixed connection has no generic current ceiling; project/product verification is required.")
+            missing.append("connection product/standard basis")
+        else:
+            headroom=option.rating_a-ib
+            connection=ConnectionComparison("PASS" if ib<=option.rating_a else "FAIL",option,ib,option.rating_a,headroom,f"Ib {ib:.1f} A {'≤' if ib<=option.rating_a else '>'} connection rating {option.rating_a:.1f} A")
+            missing.append("connection product/standard basis")
+        verification.append(f"Connection: {option.evidence_status}")
     ampacity=None
     if data.ampacity_route is not None:
         ampacity=calculate_routed_ampacity(data.ampacity_route)
@@ -92,9 +119,9 @@ def check_feeder(data: FeederInput) -> FeederResult:
             verification.append(f"Voltage drop: {voltage_drop.standards_status}")
             if voltage_drop.comparison=="FAIL": vd_failed=True
             elif voltage_drop.comparison=="NO LIMIT CHECKED": vd_unverified=True; missing.append("permitted voltage-drop limit/source")
-    any_failure=breaker_failed or ampacity_comparison.comparison=="FAIL" or vd_failed
+    any_failure=breaker_failed or connection.comparison=="FAIL" or ampacity_comparison.comparison=="FAIL" or vd_failed
     if any_failure: overall="FAIL"
     else:
-        unresolved=breaker is None or not _breaker_verified_for_overall(breaker) or not _ampacity_verified_for_overall(ampacity) or ampacity_comparison.comparison=="NOT VERIFIED" or (vd_required and (voltage_drop is None or vd_unverified))
+        unresolved=breaker is None or not _breaker_verified_for_overall(breaker) or connection.comparison=="NOT VERIFIED" or (connection.option is not None and "NOT VERIFIED" in connection.option.evidence_status.upper()) or not _ampacity_verified_for_overall(ampacity) or ampacity_comparison.comparison=="NOT VERIFIED" or (vd_required and (voltage_drop is None or vd_unverified))
         overall="NOT VERIFIED" if unresolved else "PASS"
-    return FeederResult(overall,current,breaker,ampacity,ampacity_comparison,voltage_drop,tuple(dict.fromkeys(missing)),tuple(verification))
+    return FeederResult(overall,current,breaker,connection,ampacity,ampacity_comparison,voltage_drop,tuple(dict.fromkeys(missing)),tuple(verification))

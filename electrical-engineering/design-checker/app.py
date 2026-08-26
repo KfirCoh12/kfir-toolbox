@@ -194,6 +194,13 @@ else:
         demand=st.number_input("Usage / demand factor",min_value=0.01,max_value=1.0,value=1.0,step=0.05,key="ck_dem")
         st.header("Protection")
         breaker=st.number_input("Breaker rating In (A)",min_value=1.0,value=200.0,step=5.0,key="ck_br")
+        st.header("Outlet / connection")
+        ck_connection_options = connection_options_for_phase("three")
+        ck_connection_labels = ["Not specified"] + [x.label for x in ck_connection_options]
+        ck_connection_label = st.selectbox("Connection type", ck_connection_labels, key="ck_conn")
+        ck_connection = None if ck_connection_label == "Not specified" else next(x for x in ck_connection_options if x.label == ck_connection_label)
+        if ck_connection is not None:
+            st.caption(ck_connection.note)
         st.header("Cable")
         _, material, size, route, cable = source_inputs("ck_")
         st.header("Voltage drop")
@@ -204,23 +211,28 @@ else:
         annex=st.checkbox("Use IEC Annex G fallback impedance assumptions",value=True,disabled=not use_vd,key="ck_annex")
     if st.button("Check supply",type="primary",use_container_width=True):
         try:
-            r=check_feeder(FeederInput(load_type="kw",load_value=load_kw,voltage_v=voltage,phase="three",power_factor=pf,demand_factor=demand,breaker_in_a=breaker,cable=cable,ampacity_route=route,length_m=length if use_vd else None,voltage_drop_cross_section_mm2=size if use_vd else None,voltage_drop_material=material if use_vd else None,permitted_voltage_drop_percent=vd_limit if use_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if use_vd else None,allow_annex_g_defaults=annex if use_vd else False))
+            r=check_feeder(FeederInput(load_type="kw",load_value=load_kw,voltage_v=voltage,phase="three",power_factor=pf,demand_factor=demand,breaker_in_a=breaker,connection_option_id=ck_connection.id if ck_connection else None,cable=cable,ampacity_route=route,length_m=length if use_vd else None,voltage_drop_cross_section_mm2=size if use_vd else None,voltage_drop_material=material if use_vd else None,permitted_voltage_drop_percent=vd_limit if use_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if use_vd else None,allow_annex_g_defaults=annex if use_vd else False))
         except ValueError as exc:
             st.error(str(exc)); st.stop()
         summary=summarize_feeder_result(r,voltage_drop_requested=use_vd)
         a,b=st.columns(2); a.metric("Engineering checks",summary.engineering_status); b.metric("Standards verification",summary.standards_status,f"{summary.open_item_count} open item(s)" if summary.open_item_count else None)
         if summary.primary_message:
             (st.error if summary.engineering_status=="FAIL" else st.warning)(summary.primary_message)
-        c1,c2,c3,c4=st.columns(4)
+        c1,c2,c3,c4,c5=st.columns(5)
         c1.metric("Design current · Ib",f"{r.current.design_current_a:.1f} A")
         c2.metric("Breaker · In",f"{breaker:.0f} A",r.breaker.comparison if r.breaker else None)
-        c3.metric("Cable capacity · Iz",f"{r.ampacity.iz_a:.1f} A" if r.ampacity and r.ampacity.iz_a is not None else "—",r.ampacity_comparison.comparison)
-        c4.metric("Voltage drop",f"{r.voltage_drop.voltage_drop_percent:.2f}%" if r.voltage_drop else "—",r.voltage_drop.comparison if r.voltage_drop else None)
+        c3.metric("Connection",f"{r.connection.rating_a:.0f} A" if r.connection.rating_a is not None else ("Fixed" if r.connection.option else "—"),r.connection.comparison)
+        c4.metric("Cable capacity · Iz",f"{r.ampacity.iz_a:.1f} A" if r.ampacity and r.ampacity.iz_a is not None else "—",r.ampacity_comparison.comparison)
+        c5.metric("Voltage drop",f"{r.voltage_drop.voltage_drop_percent:.2f}%" if r.voltage_drop else "—",r.voltage_drop.comparison if r.voltage_drop else None)
         if r.missing_or_unverified:
             with st.expander("Open verification items"):
                 for x in r.missing_or_unverified: st.write("•",x)
         with st.expander("Standards, evidence & calculation details"):
             for x in r.verification_summary: st.write("•",x)
+            if r.connection.option:
+                st.markdown("**Connection check**")
+                st.write(r.connection.detail)
+                st.write(f"**Evidence status:** {r.connection.option.evidence_status}")
             if r.ampacity and r.ampacity.source_metadata:
                 st.markdown("**Cable evidence**")
                 for k,v in r.ampacity.source_metadata.items(): st.write(f"**{k.replace('_',' ').capitalize()}:** {v}")

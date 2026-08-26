@@ -64,5 +64,22 @@ class FeederCheckerTests(unittest.TestCase):
         self.assertEqual(r.overall_outcome, "NOT VERIFIED")
         self.assertIn("breaker_in_a", r.missing_or_unverified)
 
+    def test_undersized_connection_fails_existing_supply(self):
+        r = check_feeder(self._feeder(connection_option_id="industrial_125a_3ph"))
+        self.assertEqual(r.connection.comparison, "FAIL")
+        self.assertEqual(r.overall_outcome, "FAIL")
+
+    def test_connection_can_pass_numerically_but_remains_standards_incomplete(self):
+        r = check_feeder(self._feeder(load_value=30, breaker_in_a=63, connection_option_id="industrial_63a_3ph"))
+        self.assertEqual(r.connection.comparison, "PASS")
+        self.assertEqual(r.connection.rating_a, 63.0)
+        self.assertIn("connection product/standard basis", r.missing_or_unverified)
+        self.assertEqual(r.overall_outcome, "NOT VERIFIED")
+
+    def test_wrong_phase_connection_fails(self):
+        r = check_feeder(self._feeder(load_value=5, breaker_in_a=16, connection_option_id="general_socket_16a_1ph"))
+        self.assertEqual(r.connection.comparison, "FAIL")
+        self.assertEqual(r.overall_outcome, "FAIL")
+
 
 if __name__ == "__main__": unittest.main()
