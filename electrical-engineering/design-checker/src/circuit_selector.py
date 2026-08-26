@@ -1,14 +1,10 @@
-"""Conservative V0.2 automatic circuit selection over explicitly supported data.
-
-This module does not invent breaker standards or cable sizes. It searches a
-small declared candidate set, uses the existing current/ampacity/voltage-drop
-engines, and reports standards limitations separately from numerical sizing.
-"""
+"""Conservative V0.5 automatic circuit selection over explicitly supported data."""
 from dataclasses import dataclass
 from typing import Literal
 
 from .ampacity_data import BASE_IZ_METHOD_E_3_LOADED
 from .cable import CableAmpacityInput, calculate_supported_iz
+from .connection import ConnectionOption, suggest_connection
 from .current import CurrentResult, calculate_design_current
 from .voltage_drop import VoltageDropResult, calculate_voltage_drop
 
@@ -39,6 +35,7 @@ class CircuitSelectionResult:
     suggested_breaker_a: float | None
     suggested_cable_mm2: float | None
     cable_iz_a: float | None
+    suggested_connection: ConnectionOption | None
     voltage_drop: VoltageDropResult | None
     rejected_candidates: tuple[str, ...]
     limitations: tuple[str, ...]
@@ -54,33 +51,30 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
     limitations = ["Breaker candidate is a conventional rating suggestion only; IEC 60364-4-43 protection verification is not yet implemented."]
     trace = [f"Design current Ib = {ib:.3f} A"]
     if breaker is None:
-        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.2 set is >= Ib."]))
+        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.5 set is >= Ib."]))
     trace.append(f"First declared breaker candidate >= Ib: {breaker:.0f} A")
+    connection = suggest_connection(phase=data.phase, required_current_a=breaker)
+    limitations.append("Connection suggestion uses a conventional nominal-rating catalogue only; exact product and applicable connection standard are not yet verified.")
+    trace.append(f"Connection suggestion for {breaker:.0f} A requirement: {connection.label}")
     if data.phase != "three":
         limitations.append("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.")
-        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, tuple(), tuple(limitations), tuple(trace))
+        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
 
     rejected=[]
     sizes=sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
     for size in sizes:
         amp=calculate_supported_iz(CableAmpacityInput(material=data.material,cross_section_mm2=size,insulation="xlpe_epr",loaded_conductors=3,installation_method="E",environment="air",ambient_temperature_c=data.ambient_temperature_c,grouped_circuits=data.grouped_circuits,grouping_arrangement=data.grouping_arrangement,parallel_runs=1,thdi_percent=0.0,neutral_loaded=False))
         if amp.iz_a is None:
-            rejected.append(f"{size:g} mm²: ampacity not verified for supplied conditions")
-            continue
-        # Conservative selection target: cable must carry the suggested breaker rating,
-        # not merely Ib, so the suggestion does not knowingly create In > Iz.
+            rejected.append(f"{size:g} mm²: ampacity not verified for supplied conditions"); continue
         if amp.iz_a < breaker:
-            rejected.append(f"{size:g} mm²: Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A")
-            continue
+            rejected.append(f"{size:g} mm²: Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A"); continue
         vd=None
         if data.length_m is not None:
             vd=calculate_voltage_drop(current_a=ib,length_m=data.length_m,cross_section_mm2=size,system_voltage_v=data.voltage_v,phase=data.phase,material=data.material,power_factor=data.power_factor,permitted_limit_percent=data.permitted_voltage_drop_percent,limit_source=data.voltage_drop_limit_source,allow_annex_g_defaults=data.allow_annex_g_defaults)
             if vd.comparison == "FAIL":
-                rejected.append(f"{size:g} mm²: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%")
-                continue
-            if vd.comparison == "NO LIMIT CHECKED":
-                limitations.append("Voltage drop was calculated but no sourced permitted limit was checked.")
+                rejected.append(f"{size:g} mm²: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%"); continue
+            if vd.comparison == "NO LIMIT CHECKED": limitations.append("Voltage drop was calculated but no sourced permitted limit was checked.")
         trace.append(f"Selected first supported cable candidate: {size:g} mm², Iz = {amp.iz_a:.1f} A")
-        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
+        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
 
-    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.2 dataset passed all requested checks."]))
+    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.5 dataset passed all requested checks."]))
