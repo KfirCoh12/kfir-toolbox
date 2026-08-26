@@ -18,4 +18,13 @@ class UIScopeTests(unittest.TestCase):
         for term in ("clock position", "IP degree", "identification colour", "interlocking"):
             self.assertNotIn(term, self.text.lower())
 
+    def test_primary_inputs_live_in_main_workspace(self):
+        self.assertNotIn("with st.sidebar:", self.text)
+        self.assertGreaterEqual(self.text.count('st.markdown("### Input workspace")'), 3)
+        self.assertGreaterEqual(self.text.count("with st.container(border=True):"), 3)
+
+    def test_workspace_uses_engineering_flow_labels(self):
+        self.assertIn("LOAD → CURRENT → PROTECTION → CABLE", self.text)
+        self.assertIn("SUPPLY → KNOWN LIMITS → MAXIMUM LOAD", self.text)
+
 if __name__ == "__main__": unittest.main()

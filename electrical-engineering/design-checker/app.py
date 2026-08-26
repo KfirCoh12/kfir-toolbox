@@ -29,10 +29,13 @@ div.stButton > button {min-height:3rem; border-radius:12px; font-weight:700;}
 .result-label {opacity:.68; font-size:.84rem; margin-bottom:.35rem;}
 .result-value {font-size:2rem; font-weight:650; letter-spacing:-.025em; line-height:1.08;}
 .result-note {margin-top:.45rem; opacity:.68; font-size:.83rem;}
+[data-testid="stVerticalBlockBorderWrapper"] {border-radius:16px;}
+[data-testid="stVerticalBlockBorderWrapper"] > div {padding:1.15rem 1.25rem;}
+[data-testid="stRadio"] {margin-bottom:.7rem;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="hero"><div class="eyebrow">Electrical engineering · V0.5</div><h1>⚡ Electrical Design Checker</h1><p>Size a new supply, check an existing circuit, or find the maximum load an existing circuit can support.</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="hero"><div class="eyebrow">Electrical engineering · V0.7</div><h1>⚡ Electrical Design Checker</h1><p>Size a new supply, check an existing circuit, or find the maximum load an existing circuit can support.</p></div>""", unsafe_allow_html=True)
 
 mode = st.radio(
     "What do you want to do?",
@@ -79,8 +82,9 @@ def source_inputs(prefix=""):
 if mode == "Design a supply":
     st.subheader("Design a supply")
     st.caption("Give the load and installation basics. The tool searches only the cable sizes currently backed by our dataset.")
-    with st.sidebar:
-        st.caption("DESIGN INPUTS")
+    with st.container(border=True):
+        st.markdown("### Input workspace")
+        st.caption("LOAD → CURRENT → PROTECTION → CABLE")
         st.header("Load")
         load_kw = st.number_input("Consumer load (kW)", min_value=0.1, value=30.0, step=1.0)
         demand = st.number_input("Usage / demand factor", min_value=0.01, max_value=1.0, value=0.80, step=0.05)
@@ -132,13 +136,14 @@ if mode == "Design a supply":
                 st.markdown("**Smaller/rejected candidates**")
                 for x in r.rejected_candidates: st.write("•",x)
     else:
-        st.info("Enter the consumer information in the sidebar, then press **Suggest supply**.")
+        st.info("Enter the consumer information above, then press **Suggest supply**.")
 
 elif mode == "Find maximum load":
     st.subheader("Find maximum load")
     st.caption("Describe the existing circuit. The lowest supported constraint becomes the limiting current.")
-    with st.sidebar:
-        st.caption("EXISTING CIRCUIT")
+    with st.container(border=True):
+        st.markdown("### Input workspace")
+        st.caption("SUPPLY → KNOWN LIMITS → MAXIMUM LOAD")
         st.header("Supply")
         voltage = st.number_input("System voltage (V)", min_value=1.0, value=400.0, step=10.0, key="ml_v")
         phase_label = st.selectbox("Phase", ["Three-phase", "Single-phase"], key="ml_phase")
@@ -199,8 +204,9 @@ elif mode == "Find maximum load":
 else:
     st.subheader("Check an existing supply")
     st.caption("Check a selected breaker and cable against a known load. This preserves the original feeder-checker workflow.")
-    with st.sidebar:
-        st.caption("FEEDER INPUTS")
+    with st.container(border=True):
+        st.markdown("### Input workspace")
+        st.caption("LOAD → PROTECTION → CONNECTION → CABLE")
         st.header("Load")
         load_kw=st.number_input("Consumer load (kW)",min_value=0.1,value=97.0,step=1.0,key="ck_load")
         voltage=st.number_input("System voltage (V)",min_value=1.0,value=400.0,step=10.0,key="ck_v")
@@ -261,6 +267,6 @@ else:
             if r.voltage_drop:
                 for x in r.voltage_drop.trace: st.code(x)
     else:
-        st.info("Enter the existing feeder details in the sidebar, then press **Check supply**.")
+        st.info("Enter the existing feeder details above, then press **Check supply**.")
 
-st.caption("V0.6 keeps the main workflow focused on quantities that affect load, current, protection, cable capacity, voltage drop, or connection current. Secondary assumptions stay under Advanced.")
+st.caption("V0.7 keeps the main workflow focused on quantities that affect load, current, protection, cable capacity, voltage drop, or connection current. Secondary assumptions stay under Advanced.")
