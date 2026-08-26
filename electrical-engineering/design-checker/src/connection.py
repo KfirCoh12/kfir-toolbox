@@ -1,10 +1,8 @@
-"""V0.6 outlet / connection evidence and recommendation layer.
+"""Connection current-rating evidence and recommendation layer.
 
-Industrial plug/socket nominal-rating classes are now tied to current IEC 60309
-publication metadata. The evidence is intentionally scoped: it supports the IEC
-60309 family and rating series used by this V0 catalogue, but does not by itself
-verify an exact product, pole/contact arrangement, clock position, voltage/frequency
-coding, IP degree, interlock, or national/project requirement.
+Keep this layer intentionally narrow: phase and nominal current rating are used by
+the kW/A/cable relationship. IEC metadata is retained only as provenance for the
+rating series; product/specification details are outside this tool's core scope.
 """
 from dataclasses import dataclass
 from typing import Literal
@@ -19,20 +17,6 @@ class EvidenceSource:
     title: str
     source_url: str
     scope_note: str
-
-@dataclass(frozen=True)
-class IEC60309Configuration:
-    poles: str
-    voltage_range_v: str
-    frequency_hz: str
-    clock_position_h: int
-    identification_colour: str
-    evidence_status: str
-    evidence_sources: tuple[EvidenceSource, ...]
-
-    @property
-    def label(self) -> str:
-        return f"{self.poles} · {self.voltage_range_v} · {self.frequency_hz} · {self.clock_position_h}h · {self.identification_colour}"
 
 @dataclass(frozen=True)
 class ConnectionOption:
@@ -66,36 +50,6 @@ IEC_60309_2 = EvidenceSource(
 IEC_60309_SOURCES = (IEC_60309_1, IEC_60309_2)
 
 
-LEGRAND_400V_3PE = EvidenceSource(
-    standard="Manufacturer product evidence — IEC 60309-1 / IEC 60309-2",
-    edition="current product page",
-    publication_date="accessed 2026-08-26",
-    title="Legrand Hypra panel appliance inlet 380/415 V~ 16 A 3P+E",
-    source_url="https://www.legrand.com/ecatalogue/en/catalog/products/panel-appliance-inlet-hypra-ip-44-380415-v-16-a-3pe-metal-052163",
-    scope_note="Manufacturer page states conformity to IEC 60309-1/-2 and identifies 380/415 V 50/60 Hz, 3P+E, 4 poles, red, 6 h.",
-)
-
-LEGRAND_400V_3PNE = EvidenceSource(
-    standard="Manufacturer product evidence — IEC 60309-1 / IEC 60309-2",
-    edition="current product page",
-    publication_date="accessed 2026-08-26",
-    title="Legrand P17 panel socket 380/415 V~ 16 A 3P+N+E",
-    source_url="https://www.legrand.com/ecatalogue/en/catalog/products/panel-mounting-socket-p17-ip6667-380415-v-16-3pne-555389",
-    scope_note="Manufacturer page identifies 400 V 50/60 Hz, 3P+N+E, 5 poles, red, 6 h under EN/IEC 60309 product family.",
-)
-
-_CONFIG_STATUS = "IEC 60309 380/415 V CONFIGURATION EVIDENCE MAPPED — EXACT PRODUCT / IP / INTERLOCK NOT VERIFIED"
-
-def iec60309_400v_configuration(*, requires_neutral: bool) -> IEC60309Configuration:
-    return IEC60309Configuration(
-        poles="3P+N+E" if requires_neutral else "3P+E",
-        voltage_range_v="380/415 V AC",
-        frequency_hz="50/60 Hz",
-        clock_position_h=6,
-        identification_colour="red",
-        evidence_status=_CONFIG_STATUS,
-        evidence_sources=IEC_60309_SOURCES + ((LEGRAND_400V_3PNE,) if requires_neutral else (LEGRAND_400V_3PE,)),
-    )
 _IEC_STATUS = "IEC 60309 FAMILY / RATING SERIES EVIDENCE MAPPED — EXACT CONFIGURATION / PRODUCT NOT VERIFIED"
 _GENERIC_STATUS = "NATIONAL / PRODUCT STANDARD NOT VERIFIED"
 _FIXED_STATUS = "PROJECT / PRODUCT-SPECIFIC CONNECTION — STANDARD BASIS NOT YET MAPPED"
@@ -110,7 +64,7 @@ def _industrial(option_id: str, rating: float, phase: Phase) -> ConnectionOption
         rating,
         "industrial_socket",
         _IEC_STATUS,
-        "The nominal rating class is mapped to IEC 60309 evidence. Exact poles/contacts, neutral/earth arrangement, voltage/frequency keying, clock position, IP degree, interlocking and product compliance still require selection/verification.",
+        "The nominal current class is mapped to IEC 60309 evidence. Product/specification details are outside the calculation scope.",
         IEC_60309_SOURCES,
     )
 

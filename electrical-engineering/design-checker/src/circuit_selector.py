@@ -4,7 +4,7 @@ from typing import Literal
 
 from .ampacity_data import BASE_IZ_METHOD_E_3_LOADED
 from .cable import CableAmpacityInput, calculate_supported_iz
-from .connection import ConnectionOption, IEC60309Configuration, iec60309_400v_configuration, suggest_connection
+from .connection import ConnectionOption, suggest_connection
 from .current import CurrentResult, calculate_design_current
 from .voltage_drop import VoltageDropResult, calculate_voltage_drop
 
@@ -27,7 +27,6 @@ class CircuitSelectionInput:
     permitted_voltage_drop_percent: float | None = None
     voltage_drop_limit_source: str | None = None
     allow_annex_g_defaults: bool = False
-    connection_requires_neutral: bool | None = None
 
 @dataclass(frozen=True)
 class CircuitSelectionResult:
@@ -37,7 +36,6 @@ class CircuitSelectionResult:
     suggested_cable_mm2: float | None
     cable_iz_a: float | None
     suggested_connection: ConnectionOption | None
-    suggested_connection_configuration: IEC60309Configuration | None
     voltage_drop: VoltageDropResult | None
     rejected_candidates: tuple[str, ...]
     limitations: tuple[str, ...]
@@ -53,20 +51,14 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
     limitations = ["Breaker candidate is a conventional rating suggestion only; IEC 60364-4-43 protection verification is not yet implemented."]
     trace = [f"Design current Ib = {ib:.3f} A"]
     if breaker is None:
-        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.6 set is >= Ib."]))
+        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.6 set is >= Ib."]))
     trace.append(f"First declared breaker candidate >= Ib: {breaker:.0f} A")
     connection = suggest_connection(phase=data.phase, required_current_a=breaker)
-    limitations.append(f"Connection evidence: {connection.evidence_status}. Exact accessory configuration and product compliance remain to be verified.")
+    limitations.append(f"Connection rating evidence: {connection.evidence_status}.")
     trace.append(f"Connection suggestion for {breaker:.0f} A requirement: {connection.label}")
-    connection_config = None
-    if data.phase == "three" and connection.category == "industrial_socket" and data.connection_requires_neutral is not None:
-        connection_config = iec60309_400v_configuration(requires_neutral=data.connection_requires_neutral)
-        trace.append(f"IEC 60309 configuration: {connection_config.label}")
-    elif data.phase == "three" and connection.category == "industrial_socket":
-        limitations.append("IEC 60309 pole arrangement is not selected because neutral requirement was not supplied.")
     if data.phase != "three":
         limitations.append("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.")
-        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, connection, None, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
 
     rejected=[]
     sizes=sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
@@ -83,6 +75,6 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
                 rejected.append(f"{size:g} mm²: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%"); continue
             if vd.comparison == "NO LIMIT CHECKED": limitations.append("Voltage drop was calculated but no sourced permitted limit was checked.")
         trace.append(f"Selected first supported cable candidate: {size:g} mm², Iz = {amp.iz_a:.1f} A")
-        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, connection, connection_config, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
+        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
 
-    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, connection, connection_config, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.6 dataset passed all requested checks."]))
+    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.6 dataset passed all requested checks."]))
