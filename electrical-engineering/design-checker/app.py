@@ -4,13 +4,7 @@ import streamlit as st
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
 from src.feeder import FeederInput, check_feeder
-
-NHXH_PHASE_CONDUCTOR_MM2 = {
-    "5x10": 10.0,
-    "5x25": 25.0,
-    "3x95+50": 95.0,
-    "3x120+70": 120.0,
-}
+from src.manufacturer_ampacity import get_nhxh_phase_conductor_mm2
 
 st.set_page_config(
     page_title="Electrical Design Checker V0",
@@ -200,7 +194,10 @@ with st.sidebar:
         st.caption("Supported V0 condition: copper NHXH FE180/E90, in air, 30 °C.")
         construction = st.selectbox("Cable construction", ["5x10", "5x25", "3x95+50", "3x120+70"])
         material = "copper"
-        cross_section = NHXH_PHASE_CONDUCTOR_MM2[construction]
+        cross_section = get_nhxh_phase_conductor_mm2(construction)
+        if cross_section is None:
+            st.error("Selected NHXH construction has no verified phase-conductor section.")
+            st.stop()
         ambient = 30
         st.text_input("Ambient air temperature", value="30 °C", disabled=True)
         grouped = st.number_input("Grouped circuits / cables", min_value=1, value=1, step=1)
