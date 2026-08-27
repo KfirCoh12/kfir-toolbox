@@ -6,6 +6,7 @@ not yet perform board-level diversity, incomer sizing, pole/way allocation,
 selectivity, or phase-imbalance compliance checks.
 """
 from dataclasses import dataclass
+from math import isclose, isfinite
 from typing import Literal
 
 from .circuit_engine import (
@@ -24,6 +25,8 @@ class BoardPlanRequest:
     board_id: str
     description: str
     circuits: tuple[CircuitDesignRequest, ...]
+    line_to_line_voltage_v: float = 400.0
+    line_to_neutral_voltage_v: float = 230.0
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,28 @@ def _board_scope(circuits: tuple[CircuitDesignResult, ...]) -> BoardScopeStatus:
     return "SUPPORTED_SCOPE"
 
 
+def _validate_board_system(data: BoardPlanRequest) -> None:
+    for name, value in (
+        ("line_to_line_voltage_v", data.line_to_line_voltage_v),
+        ("line_to_neutral_voltage_v", data.line_to_neutral_voltage_v),
+    ):
+        if not isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a finite value greater than 0")
+
+    for circuit in data.circuits:
+        expected = (
+            data.line_to_line_voltage_v
+            if circuit.phase == "three"
+            else data.line_to_neutral_voltage_v
+        )
+        if not isclose(circuit.voltage_v, expected, rel_tol=0.0, abs_tol=1e-9):
+            voltage_kind = "line-to-line" if circuit.phase == "three" else "line-to-neutral"
+            raise ValueError(
+                f"Circuit {circuit.circuit_id} voltage {circuit.voltage_v:g} V does not match "
+                f"the board {voltage_kind} voltage {expected:g} V"
+            )
+
+
 def _balance_phases(
     circuits: tuple[CircuitDesignResult, ...],
 ) -> BoardPhaseBalance:
@@ -208,6 +233,7 @@ def calculate_board_plan(data: BoardPlanRequest) -> BoardPlanResult:
     if len(circuit_ids) != len(set(circuit_ids)):
         raise ValueError("circuit_id values must be unique within a board")
 
+    _validate_board_system(data)
     circuits = tuple(calculate_circuit_design(circuit) for circuit in data.circuits)
     return BoardPlanResult(
         request=data,
