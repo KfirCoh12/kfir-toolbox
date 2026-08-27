@@ -88,6 +88,7 @@ def source_inputs(prefix=""):
         "Cable source",
         ["Generic XLPE/EPR · IEC", "NHXH FE180/E90 · Manufacturer"],
         key=f"{prefix}source",
+        help="Choose the data source that matches the existing cable.",
     )
     if source.startswith("Generic"):
         material = st.selectbox(
@@ -111,6 +112,7 @@ def source_inputs(prefix=""):
                 value=1,
                 step=1,
                 key=f"{prefix}grp",
+                help="Total loaded circuits or cables installed together.",
             )
             if grouped > 1:
                 arrangement = st.selectbox(
@@ -121,13 +123,12 @@ def source_inputs(prefix=""):
                         "ladder_single_layer",
                     ],
                     key=f"{prefix}arr",
+                    help="Physical arrangement used for the grouping correction.",
                 )
         cable, route = generic_route(material, size, ambient, grouped, arrangement)
         return source, material, float(size), route, cable
-    st.caption(
-        "Supported V0 manufacturer condition: copper NHXH FE180/E90, in air, 30 °C. "
-        "Unsupported corrections remain unverified."
-    )
+
+    st.caption("NHXH FE180/E90 · copper · air · 30 °C")
     construction = st.selectbox(
         "Cable construction",
         ["5x10", "5x25", "3x95+50", "3x120+70"],
@@ -278,9 +279,7 @@ if mode == "Design a supply":
         )
 
         if not installation_supported:
-            st.warning(
-                "Cable auto-sizing: NOT VERIFIED for the current installation conditions."
-            )
+            st.warning("Cable auto-sizing: NOT VERIFIED for the current installation conditions.")
             with st.expander("Why cable sizing is not verified"):
                 for material_label, support in (
                     ("Copper", copper_support),
@@ -305,10 +304,7 @@ if mode == "Design a supply":
             length_col, _ = st.columns([1, 3])
             with length_col:
                 length = st.number_input(
-                    "Cable length (m)",
-                    min_value=0.1,
-                    value=50.0,
-                    step=5.0,
+                    "Cable length (m)", min_value=0.1, value=50.0, step=5.0
                 )
             with st.expander("Advanced voltage-drop settings"):
                 vd_limit = st.number_input(
@@ -318,13 +314,9 @@ if mode == "Design a supply":
                     step=0.5,
                     help="Maximum voltage drop allowed by the project criterion.",
                 )
-                vd_source = st.text_input(
-                    "Limit source",
-                    value="Project criterion",
-                )
+                vd_source = st.text_input("Limit source", value="Project criterion")
                 annex = st.checkbox(
-                    "Use IEC Annex G fallback impedance assumptions",
-                    value=True,
+                    "Use IEC Annex G fallback impedance assumptions", value=True
                 )
 
     design_signature = (
@@ -344,11 +336,7 @@ if mode == "Design a supply":
         bool(annex) if check_vd else False,
     )
 
-    calculate_design = st.button(
-        "Suggest supply",
-        type="primary",
-        use_container_width=True,
-    )
+    calculate_design = st.button("Suggest supply", type="primary", use_container_width=True)
 
     if calculate_design:
         try:
@@ -367,9 +355,7 @@ if mode == "Design a supply":
                     equal_current_sharing_confirmed=equal_current_sharing,
                     length_m=length if check_vd else None,
                     permitted_voltage_drop_percent=vd_limit if check_vd else None,
-                    voltage_drop_limit_source=(vd_source.strip() or None)
-                    if check_vd
-                    else None,
+                    voltage_drop_limit_source=(vd_source.strip() or None) if check_vd else None,
                     allow_annex_g_defaults=annex if check_vd else False,
                 )
             )
@@ -392,9 +378,7 @@ if mode == "Design a supply":
         r_al = options.aluminium
 
         if r.status == "SUGGESTION":
-            st.success(
-                "A provisional sizing suggestion was found from the currently supported data."
-            )
+            st.success("A provisional sizing suggestion was found from the currently supported data.")
         elif r.status == "NO SUPPORTED SOLUTION":
             st.error("No solution was found inside the current supported dataset.")
         else:
@@ -440,12 +424,10 @@ if mode == "Design a supply":
             st.write("**Connection:**", explanation.connection_reason)
             if explanation.voltage_drop_reason:
                 st.write("**Voltage drop:**", explanation.voltage_drop_reason)
-
             if explanation.why_not_smaller:
                 st.markdown("**Why not a smaller copper cable?**")
                 for reason in explanation.why_not_smaller:
                     st.write("•", reason)
-
             if r.suggested_cable_mm2 and r_al.suggested_cable_mm2:
                 st.markdown("**Cable comparison**")
                 left, right = st.columns(2)
@@ -475,64 +457,71 @@ if mode == "Design a supply":
 
 else:
     st.subheader("Existing supply capacity")
-    st.info(
-        "Select what you already have. You can provide a breaker, a cable, an outlet/connection, "
-        "or any combination of them. The tool uses the lowest known supported limit to calculate "
-        "the maximum current and kW. Anything you do not provide is listed as something that still "
-        "needs verification."
-    )
-    with st.container(border=True):
-        st.markdown("### What do you already have?")
-        st.caption("KNOWN COMPONENT(S) → LOWEST CURRENT LIMIT → MAXIMUM kW")
 
-        use_breaker = st.checkbox(
-            "I have a breaker rating", value=True, key="cap_have_breaker"
-        )
-        breaker = None
-        if use_breaker:
-            breaker = st.number_input(
-                "Breaker rating In (A)",
-                min_value=1.0,
-                value=63.0,
-                step=1.0,
-                key="cap_breaker",
+    with st.container(border=True):
+        st.caption("KNOWN COMPONENT(S) → LOWEST CURRENT LIMIT → MAXIMUM kW")
+        st.markdown("#### What do you already have?")
+
+        known_breaker_col, known_cable_col, known_connection_col = st.columns(3)
+        with known_breaker_col:
+            use_breaker = st.checkbox(
+                "Breaker",
+                value=True,
+                key="cap_have_breaker",
+                help="Use this if the protective device rating is known.",
+            )
+        with known_cable_col:
+            use_cable = st.checkbox(
+                "Cable",
+                value=False,
+                key="cap_have_cable",
+                help="Use this if the existing cable construction is known.",
+            )
+        with known_connection_col:
+            use_connection = st.checkbox(
+                "Outlet / connection",
+                value=False,
+                key="cap_have_conn",
+                help="Use this if the outlet or connection rating is known.",
             )
 
-        use_cable = st.checkbox(
-            "I have an existing cable", value=True, key="cap_have_cable"
-        )
+        breaker = None
+        if use_breaker:
+            breaker_col, _ = st.columns([1, 3])
+            with breaker_col:
+                breaker = st.number_input(
+                    "Breaker rating In (A)",
+                    min_value=1.0,
+                    value=63.0,
+                    step=1.0,
+                    key="cap_breaker",
+                    help="Rated current printed on the breaker or protective device.",
+                )
+
         material = "copper"
         size = None
         route = None
+        source = None
         if use_cable:
-            _, material, size, route, _ = source_inputs("cap_")
-
-        use_connection = st.checkbox(
-            "I have an outlet / connection rating",
-            value=False,
-            key="cap_have_conn",
-        )
+            st.markdown("##### Existing cable")
+            source, material, size, route, _ = source_inputs("cap_")
 
         st.markdown("#### Electrical system")
-        st.caption(
-            "These values convert the current ceiling into kW/kVA; "
-            "they are not additional circuit components."
-        )
-        c1, c2, c3 = st.columns(3)
-        with c1:
+        phase_col, voltage_col, pf_col, _ = st.columns([1, 1, 1, 1])
+        with phase_col:
             phase_label = st.selectbox(
                 "Phase", ["Three-phase", "Single-phase"], key="cap_phase"
             )
-            phase = "three" if phase_label == "Three-phase" else "single"
-        with c2:
+        phase = "three" if phase_label == "Three-phase" else "single"
+        with voltage_col:
             voltage = st.number_input(
                 "System voltage (V)",
                 min_value=1.0,
-                value=400.0,
+                value=400.0 if phase == "three" else 230.0,
                 step=10.0,
                 key="cap_v",
             )
-        with c3:
+        with pf_col:
             pf = st.number_input(
                 "Power factor",
                 min_value=0.01,
@@ -540,152 +529,161 @@ else:
                 value=0.90,
                 step=0.01,
                 key="cap_pf",
+                help="Expected operating power factor of the load.",
             )
 
         connection_option_id = None
+        selected_label = None
         if use_connection:
             options = connection_options_for_phase(phase, include_fixed=False)
             option_labels = {x.label: x.id for x in options}
-            selected_label = st.selectbox(
-                "Outlet / connection",
-                list(option_labels.keys()),
-                key="cap_conn",
-            )
+            connection_col, _ = st.columns([1, 3])
+            with connection_col:
+                selected_label = st.selectbox(
+                    "Outlet / connection",
+                    list(option_labels.keys()),
+                    key="cap_conn",
+                    help="Select the known outlet or connection rating.",
+                )
             connection_option_id = option_labels[selected_label]
 
-        use_vd = st.checkbox(
-            "I know the cable length and want voltage drop to limit capacity",
-            value=False,
-            key="cap_use_vd",
-            disabled=not use_cable,
-        )
-        length = st.number_input(
-            "Cable length (m)",
-            min_value=0.1,
-            value=50.0,
-            step=5.0,
-            disabled=not use_vd,
-            key="cap_len",
-        )
+        use_vd = False
+        length = None
         vd_limit = 5.0
         vd_source = "Project criterion"
         annex = True
-        with st.expander("Advanced voltage-drop settings"):
-            vd_limit = st.number_input(
-                "Maximum permitted drop (%)",
-                min_value=0.1,
-                value=5.0,
-                step=0.5,
-                disabled=not use_vd,
-                key="cap_vdl",
+        if use_cable:
+            st.markdown("#### Voltage drop")
+            use_vd = st.checkbox(
+                "Use cable length to limit capacity",
+                value=False,
+                key="cap_use_vd",
+                help="Optional. Enable this when voltage drop should also set the capacity ceiling.",
             )
-            vd_source = st.text_input(
-                "Limit source",
-                value="Project criterion",
-                disabled=not use_vd,
-                key="cap_vds",
-            )
-            annex = st.checkbox(
-                "Use IEC Annex G fallback impedance assumptions",
-                value=True,
-                disabled=not use_vd,
-                key="cap_annex",
-            )
+            if use_vd:
+                length_col, _ = st.columns([1, 3])
+                with length_col:
+                    length = st.number_input(
+                        "Cable length (m)",
+                        min_value=0.1,
+                        value=50.0,
+                        step=5.0,
+                        key="cap_len",
+                    )
+                with st.expander("Advanced voltage-drop settings"):
+                    vd_limit = st.number_input(
+                        "Maximum permitted drop (%)",
+                        min_value=0.1,
+                        value=5.0,
+                        step=0.5,
+                        key="cap_vdl",
+                        help="Maximum voltage drop allowed by the project criterion.",
+                    )
+                    vd_source = st.text_input(
+                        "Limit source", value="Project criterion", key="cap_vds"
+                    )
+                    annex = st.checkbox(
+                        "Use IEC Annex G fallback impedance assumptions",
+                        value=True,
+                        key="cap_annex",
+                    )
 
-    if st.button(
+    capacity_signature = (
+        bool(use_breaker),
+        float(breaker) if breaker is not None else None,
+        bool(use_cable),
+        source,
+        material if use_cable else None,
+        float(size) if size is not None else None,
+        repr(route) if route is not None else None,
+        bool(use_connection),
+        connection_option_id,
+        phase,
+        float(voltage),
+        float(pf),
+        bool(use_vd),
+        float(length) if length is not None else None,
+        float(vd_limit) if use_vd else None,
+        vd_source.strip() if use_vd else None,
+        bool(annex) if use_vd else False,
+    )
+
+    calculate_capacity = st.button(
         "Calculate existing capacity", type="primary", use_container_width=True
-    ):
+    )
+
+    if calculate_capacity:
         if not (use_breaker or use_cable or use_connection):
-            st.error(
-                "Select at least one known component: breaker, cable, or outlet / connection."
-            )
-            st.stop()
-        try:
-            r = calculate_max_load(
-                MaxLoadInput(
-                    voltage_v=voltage,
-                    phase=phase,
-                    power_factor=pf,
-                    breaker_in_a=breaker if use_breaker else None,
-                    connection_option_id=connection_option_id
-                    if use_connection
-                    else None,
-                    ampacity_route=route if use_cable else None,
-                    length_m=length if use_vd else None,
-                    voltage_drop_cross_section_mm2=size
-                    if use_vd and use_cable
-                    else None,
-                    voltage_drop_material=material
-                    if use_vd and use_cable
-                    else None,
-                    permitted_voltage_drop_percent=vd_limit if use_vd else None,
-                    voltage_drop_limit_source=(vd_source.strip() or None)
-                    if use_vd
-                    else None,
-                    allow_annex_g_defaults=annex if use_vd else False,
+            st.session_state.pop("capacity_result", None)
+            st.error("Select at least one known component: breaker, cable, or outlet / connection.")
+        else:
+            try:
+                result = calculate_max_load(
+                    MaxLoadInput(
+                        voltage_v=voltage,
+                        phase=phase,
+                        power_factor=pf,
+                        breaker_in_a=breaker if use_breaker else None,
+                        connection_option_id=connection_option_id if use_connection else None,
+                        ampacity_route=route if use_cable else None,
+                        length_m=length if use_vd else None,
+                        voltage_drop_cross_section_mm2=size if use_vd and use_cable else None,
+                        voltage_drop_material=material if use_vd and use_cable else None,
+                        permitted_voltage_drop_percent=vd_limit if use_vd else None,
+                        voltage_drop_limit_source=(vd_source.strip() or None) if use_vd else None,
+                        allow_annex_g_defaults=annex if use_vd else False,
+                    )
                 )
-            )
-        except ValueError as exc:
-            st.error(str(exc))
-            st.stop()
+                st.session_state["capacity_result"] = {
+                    "signature": capacity_signature,
+                    "result": result,
+                }
+            except ValueError as exc:
+                st.session_state.pop("capacity_result", None)
+                st.error(str(exc))
+
+    stored_capacity_result = st.session_state.get("capacity_result")
+    if stored_capacity_result and stored_capacity_result["signature"] != capacity_signature:
+        st.session_state.pop("capacity_result", None)
+        stored_capacity_result = None
+
+    if stored_capacity_result:
+        r = stored_capacity_result["result"]
 
         if r.status == "RESULT":
             if r.coverage_status == "FULL CORE COVERAGE":
-                st.success(
-                    "Capacity ceiling found from all three core component checks. "
-                    f"Limiting factor: {r.limiting_constraint}."
-                )
+                st.success(f"Capacity ceiling found. Limiting factor: {r.limiting_constraint}.")
             else:
                 st.warning(
-                    "Provisional capacity ceiling found from the information supplied. "
-                    f"Limiting factor: {r.limiting_constraint}."
+                    f"Provisional capacity ceiling found. Limiting factor: {r.limiting_constraint}."
                 )
         else:
-            st.warning(
-                "A capacity ceiling could not be verified from the supported information supplied."
-            )
+            st.warning("A capacity ceiling could not be verified from the supplied information.")
 
         c1, c2, c3 = st.columns(3)
-        c1.metric(
-            "Maximum current",
-            f"{r.max_current_a:.1f} A" if r.max_current_a else "—",
-        )
-        c2.metric(
-            "Maximum active load",
-            f"{r.max_kw:.1f} kW" if r.max_kw else "—",
-        )
-        c3.metric(
-            "Maximum apparent load",
-            f"{r.max_kva:.1f} kVA" if r.max_kva else "—",
-        )
+        c1.metric("Maximum current", f"{r.max_current_a:.1f} A" if r.max_current_a else "—")
+        c2.metric("Maximum active load", f"{r.max_kw:.1f} kW" if r.max_kw else "—")
+        c3.metric("Maximum apparent load", f"{r.max_kva:.1f} kVA" if r.max_kva else "—")
 
         if r.missing_core_checks:
-            with st.expander("Still needs verification", expanded=True):
-                st.caption(
-                    "The result above is a ceiling from the known constraints, not a complete "
-                    "circuit rating until these core checks are resolved."
-                )
+            with st.expander("Still needs verification"):
                 for x in r.missing_core_checks:
                     st.write("•", x)
 
         if r.constraints:
-            st.subheader("What sets the ceiling?")
-            for x in sorted(r.constraints, key=lambda z: z.current_a):
-                label = "← LIMITING" if x.name == r.limiting_constraint else ""
-                st.write(f"**{x.name}: {x.current_a:.1f} A** {label} — {x.detail}")
+            with st.expander("What sets the ceiling?"):
+                for x in sorted(r.constraints, key=lambda z: z.current_a):
+                    label = "← LIMITING" if x.name == r.limiting_constraint else ""
+                    st.write(f"**{x.name}: {x.current_a:.1f} A** {label} — {x.detail}")
 
         if r.limitations:
             with st.expander("Verification notes"):
                 for x in r.limitations:
                     st.write("•", x)
+
         with st.expander("Calculation trace"):
             for x in r.trace:
                 st.code(x)
-    else:
-        st.info(
-            "Choose any component(s) you already know. One known limit is enough to calculate "
-            "a provisional ceiling; adding more components makes the ceiling more complete."
-        )
 
 st.caption(
     "V0.10 focuses on two practical questions: what supply should this load use, "
