@@ -7,7 +7,10 @@ rating series; product/specification details are outside this tool's core scope.
 from dataclasses import dataclass
 from typing import Literal
 
+from .validation import require_choice, require_positive_finite
+
 Phase = Literal["single", "three"]
+
 
 @dataclass(frozen=True)
 class EvidenceSource:
@@ -17,6 +20,7 @@ class EvidenceSource:
     title: str
     source_url: str
     scope_note: str
+
 
 @dataclass(frozen=True)
 class ConnectionOption:
@@ -28,6 +32,7 @@ class ConnectionOption:
     evidence_status: str
     note: str
     evidence_sources: tuple[EvidenceSource, ...] = ()
+
 
 IEC_60309_1 = EvidenceSource(
     standard="IEC 60309-1:2021/COR1:2023",
@@ -48,7 +53,6 @@ IEC_60309_2 = EvidenceSource(
 )
 
 IEC_60309_SOURCES = (IEC_60309_1, IEC_60309_2)
-
 
 _IEC_STATUS = "IEC 60309 FAMILY / RATING SERIES EVIDENCE MAPPED — EXACT CONFIGURATION / PRODUCT NOT VERIFIED"
 _GENERIC_STATUS = "NATIONAL / PRODUCT STANDARD NOT VERIFIED"
@@ -71,7 +75,11 @@ def _industrial(option_id: str, rating: float, phase: Phase) -> ConnectionOption
 
 CONNECTION_OPTIONS = (
     ConnectionOption(
-        "general_socket_16a_1ph", "General-purpose socket · 16 A", "single", 16.0, "socket",
+        "general_socket_16a_1ph",
+        "General-purpose socket · 16 A",
+        "single",
+        16.0,
+        "socket",
         _GENERIC_STATUS,
         "Generic nominal rating only; the applicable Israeli/national socket and product standard is not yet encoded.",
     ),
@@ -84,12 +92,20 @@ CONNECTION_OPTIONS = (
     _industrial("industrial_63a_3ph", 63.0, "three"),
     _industrial("industrial_125a_3ph", 125.0, "three"),
     ConnectionOption(
-        "fixed_connection_1ph", "Fixed connection / dedicated isolating arrangement", "single", None, "fixed_connection",
+        "fixed_connection_1ph",
+        "Fixed connection / dedicated isolating arrangement",
+        "single",
+        None,
+        "fixed_connection",
         _FIXED_STATUS,
         "No generic current ceiling is assigned; equipment terminals, isolating means and project requirements require separate verification.",
     ),
     ConnectionOption(
-        "fixed_connection_3ph", "Fixed connection / dedicated isolating arrangement", "three", None, "fixed_connection",
+        "fixed_connection_3ph",
+        "Fixed connection / dedicated isolating arrangement",
+        "three",
+        None,
+        "fixed_connection",
         _FIXED_STATUS,
         "No generic current ceiling is assigned; equipment terminals, isolating means and project requirements require separate verification.",
     ),
@@ -105,21 +121,36 @@ def get_connection_option(option_id: str) -> ConnectionOption:
         raise ValueError(f"Unknown connection option: {option_id}") from exc
 
 
-def connection_options_for_phase(phase: Phase, *, include_fixed: bool = True) -> tuple[ConnectionOption, ...]:
-    return tuple(x for x in CONNECTION_OPTIONS if x.phase == phase and (include_fixed or x.rating_a is not None))
+def connection_options_for_phase(
+    phase: Phase, *, include_fixed: bool = True
+) -> tuple[ConnectionOption, ...]:
+    require_choice("phase", phase, ("single", "three"))
+    return tuple(
+        x
+        for x in CONNECTION_OPTIONS
+        if x.phase == phase and (include_fixed or x.rating_a is not None)
+    )
 
 
 def suggest_connection(*, phase: Phase, required_current_a: float) -> ConnectionOption:
-    if required_current_a <= 0:
-        raise ValueError("required_current_a must be greater than 0")
+    require_choice("phase", phase, ("single", "three"))
+    require_positive_finite("required_current_a", required_current_a)
+
     # Automatic recommendations intentionally prefer the evidence-mapped industrial
     # series. The generic national 16 A socket is not auto-selected until its own
     # national/product evidence layer is mapped.
     rated = sorted(
-        (x for x in CONNECTION_OPTIONS if x.phase == phase and x.category == "industrial_socket" and x.rating_a is not None),
+        (
+            x
+            for x in CONNECTION_OPTIONS
+            if x.phase == phase
+            and x.category == "industrial_socket"
+            and x.rating_a is not None
+        ),
         key=lambda x: x.rating_a,
     )
     for option in rated:
         if option.rating_a >= required_current_a:
             return option
-    return get_connection_option("fixed_connection_3ph" if phase == "three" else "fixed_connection_1ph")
+    fixed_id = "fixed_connection_3ph" if phase == "three" else "fixed_connection_1ph"
+    return get_connection_option(fixed_id)
