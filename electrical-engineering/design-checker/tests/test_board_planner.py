@@ -32,6 +32,7 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertTrue(all(c.breaker_a is not None for c in r.circuits))
         self.assertEqual(r.scope_status, "SUPPORTED_SCOPE")
         self.assertTrue(r.phase_balancing_implemented)
+        self.assertTrue(r.incomer_candidate_implemented)
         self.assertFalse(r.board_level_checks_implemented)
 
     def test_board_exposes_schedule_rows_without_ui_specific_logic(self):
@@ -115,6 +116,33 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(balance.spread_a, 0.0)
         assigned = tuple(a.assigned_phase for a in balance.allocations[1:])
         self.assertEqual(set(assigned), {"L1", "L2", "L3"})
+
+    def test_incomer_candidate_uses_highest_planned_phase_current(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-INC-01",
+            description="Incomer candidate test",
+            circuits=(self._circuit("C-01", "AHU", phase="three", load_kw=18),),
+        ))
+        candidate = r.incomer_candidate
+        self.assertEqual(candidate.status, "CANDIDATE")
+        self.assertAlmostEqual(candidate.required_current_a, r.phase_balance.max_phase_current_a)
+        self.assertEqual(candidate.breaker_rating_a, 32.0)
+        self.assertIn("no additional board-level diversity", candidate.basis)
+        self.assertIn("no additional board-level diversity", candidate.basis.lower())
+        self.assertIn("protection verification", candidate.basis.lower())
+
+    def test_incomer_candidate_does_not_invent_rating_above_catalog(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-INC-02",
+            description="Incomer catalog exhaustion",
+            circuits=tuple(
+                self._circuit(f"C-{i:02d}", f"Large load {i}", phase="three", load_kw=100)
+                for i in range(1, 5)
+            ),
+        ))
+        self.assertGreater(r.phase_balance.max_phase_current_a, 630)
+        self.assertEqual(r.incomer_candidate.status, "NO_CANDIDATE")
+        self.assertIsNone(r.incomer_candidate.breaker_rating_a)
 
     def test_board_supply_voltage_contract_accepts_declared_custom_system(self):
         r = calculate_board_plan(BoardPlanRequest(
