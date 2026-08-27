@@ -3,6 +3,7 @@ import streamlit as st
 
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
+from src.catalogs import BREAKER_RATINGS_A
 from src.circuit_selector import (
     CircuitSelectionInput,
     assess_installation_support,
@@ -489,13 +490,12 @@ else:
         if use_breaker:
             breaker_col, _ = st.columns([1, 3])
             with breaker_col:
-                breaker = st.number_input(
+                breaker = st.selectbox(
                     "Breaker rating In (A)",
-                    min_value=1.0,
-                    value=63.0,
-                    step=1.0,
+                    BREAKER_RATINGS_A,
+                    index=BREAKER_RATINGS_A.index(63),
                     key="cap_breaker",
-                    help="Rated current printed on the breaker or protective device.",
+                    help="Select the rated current printed on the breaker or protective device.",
                 )
 
         material = "copper"
