@@ -91,9 +91,16 @@ if mode == "Design a supply":
         ambient = 30
         grouped = 1
         arrangement = None
+        parallel_runs = 1
+        equal_current_sharing = None
         with st.expander("Advanced cable conditions"):
-            st.caption("Current automatic sizing uses the verified Method E, in-air dataset at its 30 Â°C reference condition.")
-            grouped = st.number_input("Number of grouped circuits / cables", min_value=1, value=1, step=1)
+            st.caption("Current automatic sizing uses the verified Method E, in-air dataset at its 30 °C reference condition.")
+            if phase == "three":
+                parallel_runs = st.number_input("Parallel cable runs per phase", min_value=1, value=1, step=1, key="design_parallel_runs")
+                if parallel_runs > 1:
+                    equal_current_sharing = st.checkbox("I confirm the parallel runs are arranged for acceptable current sharing", value=False, key="design_equal_share")
+                    st.caption("Aggregate ampacity is not used unless current sharing is explicitly confirmed. Grouping must include every parallel run.")
+            grouped = st.number_input("Number of grouped circuits / cables", min_value=1, value=max(1, int(parallel_runs)), step=1, key="design_grouped")
             if grouped > 1:
                 arrangement = st.selectbox("How are they grouped?", ["bunched", "perforated_tray_single_layer", "ladder_single_layer"], format_func=lambda x: {"bunched":"Bunched together", "perforated_tray_single_layer":"Single layer on perforated tray", "ladder_single_layer":"Single layer on ladder"}[x])
         st.header("Voltage drop")
@@ -108,7 +115,7 @@ if mode == "Design a supply":
             annex = st.checkbox("Use IEC Annex G fallback impedance assumptions", value=True, disabled=not check_vd)
     if st.button("Suggest supply", type="primary", use_container_width=True):
         try:
-            options = select_material_options(CircuitSelectionInput(load_type="kw",load_value=load_kw,voltage_v=voltage,phase=phase,power_factor=pf,demand_factor=demand,ambient_temperature_c=ambient,grouped_circuits=grouped,grouping_arrangement=arrangement,length_m=length if check_vd else None,permitted_voltage_drop_percent=vd_limit if check_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if check_vd else None,allow_annex_g_defaults=annex if check_vd else False))
+            options = select_material_options(CircuitSelectionInput(load_type="kw",load_value=load_kw,voltage_v=voltage,phase=phase,power_factor=pf,demand_factor=demand,ambient_temperature_c=ambient,grouped_circuits=grouped,grouping_arrangement=arrangement,parallel_runs=int(parallel_runs),equal_current_sharing_confirmed=equal_current_sharing,length_m=length if check_vd else None,permitted_voltage_drop_percent=vd_limit if check_vd else None,voltage_drop_limit_source=(vd_source.strip() or None) if check_vd else None,allow_annex_g_defaults=annex if check_vd else False))
             r = options.copper
             r_al = options.aluminium
         except ValueError as exc:
@@ -119,8 +126,10 @@ if mode == "Design a supply":
         c1,c2,c3,c4,c5 = st.columns(5)
         c1.metric("Design current Â· Ib", f"{r.current.design_current_a:.1f} A")
         c2.metric("Suggested breaker", f"{r.suggested_breaker_a:.0f} A" if r.suggested_breaker_a else "â")
-        c3.metric("Copper cable", f"{r.suggested_cable_mm2:g} mmÂ²" if r.suggested_cable_mm2 else "â")
-        c4.metric("Aluminium cable", f"{r_al.suggested_cable_mm2:g} mmÂ²" if r_al.suggested_cable_mm2 else "â")
+        copper_label = (f"{r.suggested_parallel_runs} × {r.suggested_cable_mm2:g} mm²" if r.suggested_cable_mm2 and (r.suggested_parallel_runs or 1) > 1 else f"{r.suggested_cable_mm2:g} mm²" if r.suggested_cable_mm2 else "—")
+        c3.metric("Copper cable", copper_label)
+        aluminium_label = (f"{r_al.suggested_parallel_runs} × {r_al.suggested_cable_mm2:g} mm²" if r_al.suggested_cable_mm2 and (r_al.suggested_parallel_runs or 1) > 1 else f"{r_al.suggested_cable_mm2:g} mm²" if r_al.suggested_cable_mm2 else "—")
+        c4.metric("Aluminium cable", aluminium_label)
         c5.metric("Connection", f"{r.suggested_connection.rating_a:.0f} A" if r.suggested_connection and r.suggested_connection.rating_a else "Fixed")
         explanation = explain_circuit_selection(r)
         st.markdown("### Why this suggestion?")
@@ -138,9 +147,9 @@ if mode == "Design a supply":
             st.markdown("**Cable comparison**")
             left,right=st.columns(2)
             with left:
-                st.write(f"**Copper {r.suggested_cable_mm2:g} mmÂ²** Â· Iz {r.cable_iz_a:.1f} A" + (f" Â· voltage drop {r.voltage_drop.voltage_drop_percent:.2f}%" if r.voltage_drop else ""))
+                st.write(f"**Copper {copper_label}** · aggregate Iz {r.cable_iz_a:.1f} A" + (f" · voltage drop {r.voltage_drop.voltage_drop_percent:.2f}%" if r.voltage_drop else ""))
             with right:
-                st.write(f"**Aluminium {r_al.suggested_cable_mm2:g} mmÂ²** Â· Iz {r_al.cable_iz_a:.1f} A" + (f" Â· voltage drop {r_al.voltage_drop.voltage_drop_percent:.2f}%" if r_al.voltage_drop else ""))
+                st.write(f"**Aluminium {aluminium_label}** · aggregate Iz {r_al.cable_iz_a:.1f} A" + (f" · voltage drop {r_al.voltage_drop.voltage_drop_percent:.2f}%" if r_al.voltage_drop else ""))
         if r.limitations:
             with st.expander("Important limitations"):
                 for x in r.limitations: st.write("â¢", x)

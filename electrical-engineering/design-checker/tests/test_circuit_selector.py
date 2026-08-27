@@ -63,4 +63,31 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertNotIn("compliant", combined.lower())
         self.assertNotIn("verified protection", combined.lower())
 
+    def test_parallel_runs_require_explicit_current_sharing_confirmation(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=180,voltage_v=400,phase="three",power_factor=0.9,parallel_runs=2,grouped_circuits=2,grouping_arrangement="bunched"))
+        self.assertEqual(r.status,"NOT VERIFIED")
+        self.assertIsNone(r.suggested_cable_mm2)
+        self.assertTrue(any("explicit confirmation" in x for x in r.limitations))
+
+    def test_parallel_runs_require_grouping_to_include_all_runs(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=180,voltage_v=400,phase="three",power_factor=0.9,parallel_runs=2,equal_current_sharing_confirmed=True,grouped_circuits=1))
+        self.assertEqual(r.status,"NOT VERIFIED")
+        self.assertTrue(any("at least all parallel runs" in x for x in r.limitations))
+
+    def test_confirmed_parallel_runs_can_form_supported_aggregate_ampacity(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=180,voltage_v=400,phase="three",power_factor=0.9,parallel_runs=2,equal_current_sharing_confirmed=True,grouped_circuits=2,grouping_arrangement="bunched"))
+        self.assertEqual(r.status,"SUGGESTION")
+        self.assertEqual(r.suggested_parallel_runs,2)
+        self.assertEqual(r.suggested_cable_mm2,25.0)
+        self.assertGreaterEqual(r.cable_iz_a,r.suggested_breaker_a)
+        explanation=explain_circuit_selection(r)
+        self.assertIn("2 × 25 mm²",explanation.summary)
+        self.assertIn("aggregate Iz",explanation.cable_reason)
+
+    def test_parallel_voltage_drop_uses_equal_shared_current(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=180,voltage_v=400,phase="three",power_factor=0.9,parallel_runs=2,equal_current_sharing_confirmed=True,grouped_circuits=2,grouping_arrangement="bunched",length_m=50,permitted_voltage_drop_percent=5.0,voltage_drop_limit_source="Project criterion",allow_annex_g_defaults=True))
+        self.assertEqual(r.status,"SUGGESTION")
+        self.assertTrue(any("Voltage-drop current per run" in x for x in r.trace))
+        self.assertTrue(any("identical run" in x for x in r.limitations))
+
 if __name__=="__main__": unittest.main()

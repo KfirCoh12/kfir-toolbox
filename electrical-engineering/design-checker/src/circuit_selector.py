@@ -23,6 +23,8 @@ class CircuitSelectionInput:
     ambient_temperature_c: float = 30.0
     grouped_circuits: int = 1
     grouping_arrangement: str | None = None
+    parallel_runs: int = 1
+    equal_current_sharing_confirmed: bool | None = None
     length_m: float | None = None
     permitted_voltage_drop_percent: float | None = None
     voltage_drop_limit_source: str | None = None
@@ -35,6 +37,7 @@ class CircuitSelectionResult:
     suggested_breaker_a: float | None
     suggested_cable_mm2: float | None
     cable_iz_a: float | None
+    suggested_parallel_runs: int | None
     suggested_connection: ConnectionOption | None
     voltage_drop: VoltageDropResult | None
     rejected_candidates: tuple[str, ...]
@@ -51,33 +54,49 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
     limitations = ["Breaker candidate is a conventional rating suggestion only; IEC 60364-4-43 protection verification is not yet implemented."]
     trace = [f"Design current Ib = {ib:.3f} A"]
     if breaker is None:
-        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.6 set is >= Ib."]))
+        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.6 set is >= Ib."]))
     trace.append(f"First declared breaker candidate >= Ib: {breaker:.0f} A")
     connection = suggest_connection(phase=data.phase, required_current_a=breaker)
     limitations.append(f"Connection rating evidence: {connection.evidence_status}.")
     trace.append(f"Connection suggestion for {breaker:.0f} A requirement: {connection.label}")
     if data.phase != "three":
         limitations.append("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.")
-        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+    if data.parallel_runs <= 0:
+        raise ValueError("parallel_runs must be greater than 0")
+    if data.parallel_runs > 1:
+        limitations.append("Parallel-run sizing uses aggregate ampacity only when acceptable current sharing is explicitly confirmed and grouping includes all parallel runs.")
+        if data.equal_current_sharing_confirmed is not True:
+            limitations.append("Parallel runs require explicit confirmation of acceptable current sharing per IEC 60364-5-52 clause 523.7 before automatic sizing can be verified.")
+            return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+        if data.grouped_circuits < data.parallel_runs:
+            limitations.append("Grouped circuits / cables must include at least all parallel runs before aggregate ampacity can be verified.")
+            return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+        trace.append(f"Parallel cable request: {data.parallel_runs} runs with acceptable current sharing explicitly confirmed.")
 
     rejected=[]
     sizes=sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
     for size in sizes:
-        amp=calculate_supported_iz(CableAmpacityInput(material=data.material,cross_section_mm2=size,insulation="xlpe_epr",loaded_conductors=3,installation_method="E",environment="air",ambient_temperature_c=data.ambient_temperature_c,grouped_circuits=data.grouped_circuits,grouping_arrangement=data.grouping_arrangement,parallel_runs=1,thdi_percent=0.0,neutral_loaded=False))
+        label = f"{data.parallel_runs} × {size:g} mm²/run" if data.parallel_runs > 1 else f"{size:g} mm²"
+        amp=calculate_supported_iz(CableAmpacityInput(material=data.material,cross_section_mm2=size,insulation="xlpe_epr",loaded_conductors=3,installation_method="E",environment="air",ambient_temperature_c=data.ambient_temperature_c,grouped_circuits=data.grouped_circuits,grouping_arrangement=data.grouping_arrangement,parallel_runs=data.parallel_runs,equal_current_sharing_confirmed=data.equal_current_sharing_confirmed,thdi_percent=0.0,neutral_loaded=False))
         if amp.iz_a is None:
-            rejected.append(f"{size:g} mm²: ampacity not verified for supplied conditions"); continue
+            rejected.append(f"{label}: ampacity not verified for supplied conditions"); continue
         if amp.iz_a < breaker:
-            rejected.append(f"{size:g} mm²: Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A"); continue
+            rejected.append(f"{label}: aggregate Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A"); continue
         vd=None
         if data.length_m is not None:
-            vd=calculate_voltage_drop(current_a=ib,length_m=data.length_m,cross_section_mm2=size,system_voltage_v=data.voltage_v,phase=data.phase,material=data.material,power_factor=data.power_factor,permitted_limit_percent=data.permitted_voltage_drop_percent,limit_source=data.voltage_drop_limit_source,allow_annex_g_defaults=data.allow_annex_g_defaults)
+            vd_current = ib / data.parallel_runs
+            vd=calculate_voltage_drop(current_a=vd_current,length_m=data.length_m,cross_section_mm2=size,system_voltage_v=data.voltage_v,phase=data.phase,material=data.material,power_factor=data.power_factor,permitted_limit_percent=data.permitted_voltage_drop_percent,limit_source=data.voltage_drop_limit_source,allow_annex_g_defaults=data.allow_annex_g_defaults)
+            if data.parallel_runs > 1:
+                limitations.append("Voltage drop for parallel runs is evaluated per identical run at the equal shared current; unequal sharing or dissimilar runs are outside this model.")
+                trace.append(f"Voltage-drop current per run = Ib {ib:.3f} / {data.parallel_runs} = {vd_current:.3f} A")
             if vd.comparison == "FAIL":
-                rejected.append(f"{size:g} mm²: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%"); continue
+                rejected.append(f"{label}: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%"); continue
             if vd.comparison == "NO LIMIT CHECKED": limitations.append("Voltage drop was calculated but no sourced permitted limit was checked.")
-        trace.append(f"Selected first supported cable candidate: {size:g} mm², Iz = {amp.iz_a:.1f} A")
-        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
+        trace.append(f"Selected first supported cable candidate: {label}, aggregate Iz = {amp.iz_a:.1f} A")
+        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, data.parallel_runs, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
 
-    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.6 dataset passed all requested checks."]))
+    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.6 dataset passed all requested checks."]))
 
 @dataclass(frozen=True)
 class CircuitMaterialOptionsResult:
@@ -127,9 +146,11 @@ def explain_circuit_selection(result: CircuitSelectionResult) -> CircuitSelectio
     if result.suggested_cable_mm2 is None or result.cable_iz_a is None:
         cable_reason = "No supported cable candidate was selected for these conditions."
     else:
+        runs = result.suggested_parallel_runs or 1
+        cable_label = f"{runs} × {result.suggested_cable_mm2:g} mm² parallel runs per phase" if runs > 1 else f"{result.suggested_cable_mm2:g} mm²"
         cable_reason = (
-            f"{result.suggested_cable_mm2:g} mm² is the first supported candidate "
-            f"that passed the implemented checks; Iz {result.cable_iz_a:.1f} A"
+            f"{cable_label} is the first supported candidate "
+            f"that passed the implemented checks; aggregate Iz {result.cable_iz_a:.1f} A"
         )
         if result.suggested_breaker_a is not None:
             cable_reason += f" ≥ In {result.suggested_breaker_a:.0f} A"
@@ -164,7 +185,8 @@ def explain_circuit_selection(result: CircuitSelectionResult) -> CircuitSelectio
     if result.suggested_breaker_a is not None:
         chain.append(f"{result.suggested_breaker_a:.0f} A breaker")
     if result.suggested_cable_mm2 is not None:
-        chain.append(f"{result.suggested_cable_mm2:g} mm² cable")
+        runs = result.suggested_parallel_runs or 1
+        chain.append(f"{runs} × {result.suggested_cable_mm2:g} mm² cables" if runs > 1 else f"{result.suggested_cable_mm2:g} mm² cable")
     if connection is not None:
         chain.append(f"{connection.rating_a:.0f} A connection" if connection.rating_a is not None else "fixed connection")
     summary = " → ".join(chain)
