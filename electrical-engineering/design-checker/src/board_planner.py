@@ -1,14 +1,15 @@
 """Initial board-planning intelligence over the reusable circuit engine.
 
 The board layer calculates every consumer through the shared circuit engine and
-provides a conservative phase-allocation planning heuristic. It intentionally does
-not yet perform board-level diversity, incomer sizing, pole/way allocation,
-selectivity, or phase-imbalance compliance checks.
+provides conservative phase-allocation and incomer-planning helpers. It intentionally
+does not yet perform board-level diversity, protection verification, pole/way
+allocation, selectivity, or phase-imbalance compliance checks.
 """
 from dataclasses import dataclass
 from math import isclose, isfinite
 from typing import Literal
 
+from .catalogs import BREAKER_RATINGS_A
 from .circuit_engine import (
     CircuitDesignRequest,
     CircuitDesignResult,
@@ -18,6 +19,7 @@ from .circuit_engine import (
 BoardScopeStatus = Literal["SUPPORTED_SCOPE", "PARTIAL_SCOPE", "NOT_VERIFIED"]
 BoardPhase = Literal["L1", "L2", "L3"]
 SchedulePhase = Literal["L1", "L2", "L3", "3P"]
+IncomerCandidateStatus = Literal["CANDIDATE", "NO_CANDIDATE"]
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,14 @@ class BoardPhaseBalance:
 
 
 @dataclass(frozen=True)
+class BoardIncomerCandidate:
+    status: IncomerCandidateStatus
+    required_current_a: float
+    breaker_rating_a: float | None
+    basis: str
+
+
+@dataclass(frozen=True)
 class BoardCircuitScheduleRow:
     circuit_id: str
     description: str
@@ -78,6 +88,7 @@ class BoardPlanResult:
     circuits: tuple[CircuitDesignResult, ...]
     scope_status: BoardScopeStatus
     phase_balance: BoardPhaseBalance
+    incomer_candidate: BoardIncomerCandidate
 
     @property
     def circuit_count(self) -> int:
@@ -122,6 +133,10 @@ class BoardPlanResult:
 
     @property
     def phase_balancing_implemented(self) -> bool:
+        return True
+
+    @property
+    def incomer_candidate_implemented(self) -> bool:
         return True
 
     @property
@@ -218,8 +233,24 @@ def _balance_phases(
     )
 
 
+def _suggest_incomer(balance: BoardPhaseBalance) -> BoardIncomerCandidate:
+    required = balance.max_phase_current_a
+    rating = next((float(x) for x in BREAKER_RATINGS_A if x >= required), None)
+    basis = (
+        "First declared breaker rating at or above the highest planned phase current. "
+        "Circuit demand factors are already reflected in their design currents; no additional "
+        "board-level diversity or IEC protection verification is applied."
+    )
+    return BoardIncomerCandidate(
+        status="CANDIDATE" if rating is not None else "NO_CANDIDATE",
+        required_current_a=required,
+        breaker_rating_a=rating,
+        basis=basis,
+    )
+
+
 def calculate_board_plan(data: BoardPlanRequest) -> BoardPlanResult:
-    """Calculate board circuits and produce a conservative phase allocation."""
+    """Calculate board circuits and produce conservative planning outputs."""
     board_id = data.board_id.strip()
     description = data.description.strip()
     if not board_id:
@@ -235,9 +266,11 @@ def calculate_board_plan(data: BoardPlanRequest) -> BoardPlanResult:
 
     _validate_board_system(data)
     circuits = tuple(calculate_circuit_design(circuit) for circuit in data.circuits)
+    phase_balance = _balance_phases(circuits)
     return BoardPlanResult(
         request=data,
         circuits=circuits,
         scope_status=_board_scope(circuits),
-        phase_balance=_balance_phases(circuits),
+        phase_balance=phase_balance,
+        incomer_candidate=_suggest_incomer(phase_balance),
     )
