@@ -12,6 +12,10 @@ from src.circuit_selector import (
 from src.connection import connection_options_for_phase
 from src.manufacturer_ampacity import get_nhxh_phase_conductor_mm2
 from src.max_load import MaxLoadInput, calculate_max_load
+from src.verification import (
+    summarize_circuit_selection_verification,
+    summarize_max_load_verification,
+)
 
 st.set_page_config(
     page_title="Electrical Design Checker",
@@ -150,7 +154,6 @@ if mode == "Design a supply":
 
     with st.container(border=True):
         st.caption("LOAD → CURRENT → PROTECTION → CABLE")
-
         st.markdown("#### Load")
         load_col, demand_col, _ = st.columns([1, 1, 2])
         with load_col:
@@ -208,7 +211,6 @@ if mode == "Design a supply":
         arrangement = None
         parallel_runs = 1
         equal_current_sharing = None
-
         with st.expander("Advanced installation conditions"):
             st.caption("Automatic sizing dataset: Method E · air · 30 °C.")
             if phase == "three":
@@ -229,7 +231,6 @@ if mode == "Design a supply":
                     st.caption(
                         "Grouping must include every parallel run before aggregate ampacity is used."
                     )
-
             grouped = st.number_input(
                 "Number of grouped circuits / cables",
                 min_value=1,
@@ -277,7 +278,6 @@ if mode == "Design a supply":
             copper_support.status == "SUPPORTED"
             and aluminium_support.status == "SUPPORTED"
         )
-
         if not installation_supported:
             st.warning("Cable auto-sizing: NOT VERIFIED for the current installation conditions.")
             with st.expander("Why cable sizing is not verified"):
@@ -299,7 +299,6 @@ if mode == "Design a supply":
         vd_limit = 5.0
         vd_source = "Project criterion"
         annex = True
-
         if check_vd:
             length_col, _ = st.columns([1, 3])
             with length_col:
@@ -335,7 +334,6 @@ if mode == "Design a supply":
         vd_source.strip() if check_vd else None,
         bool(annex) if check_vd else False,
     )
-
     calculate_design = st.button("Suggest supply", type="primary", use_container_width=True)
 
     if calculate_design:
@@ -376,16 +374,18 @@ if mode == "Design a supply":
         options = stored_design_result["options"]
         r = options.copper
         r_al = options.aluminium
+        verification = summarize_circuit_selection_verification(r)
+        issue_codes = {issue.code for issue in verification.issues}
 
-        if r.status == "SUGGESTION":
-            st.success("A provisional sizing suggestion was found from the currently supported data.")
-        elif r.status == "NO SUPPORTED SOLUTION":
+        if "no_supported_solution" in issue_codes:
             st.error("No solution was found inside the current supported dataset.")
-        else:
+        elif verification.scope_status == "PARTIAL_SCOPE" or verification.blocking_issues:
             st.warning(
-                "A complete automatic suggestion is not verified for these inputs. "
-                "Verified numerical parts are shown; unsupported parts remain blank."
+                "A complete automatic suggestion is not supported for these inputs. "
+                "Available numerical results are shown below."
             )
+        else:
+            st.success("A provisional sizing suggestion was found inside the supported scope.")
 
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Design current · Ib", f"{r.current.design_current_a:.1f} A")
@@ -450,10 +450,11 @@ if mode == "Design a supply":
                         )
                     )
 
-        if r.limitations:
+        if verification.issues:
             with st.expander("Important limitations"):
-                for x in r.limitations:
-                    st.write("•", x)
+                for issue in verification.issues:
+                    marker = "Needs action" if issue.blocking else "Scope note"
+                    st.write(f"**{marker} · {issue.category.replace('_', ' ')}** — {issue.message}")
 
 else:
     st.subheader("Existing supply capacity")
@@ -461,7 +462,6 @@ else:
     with st.container(border=True):
         st.caption("KNOWN COMPONENT(S) → LOWEST CURRENT LIMIT → MAXIMUM kW")
         st.markdown("#### What do you already have?")
-
         known_breaker_col, known_cable_col, known_connection_col = st.columns(3)
         with known_breaker_col:
             use_breaker = st.checkbox(
@@ -607,7 +607,6 @@ else:
         vd_source.strip() if use_vd else None,
         bool(annex) if use_vd else False,
     )
-
     calculate_capacity = st.button(
         "Calculate existing capacity", type="primary", use_container_width=True
     )
@@ -649,26 +648,26 @@ else:
 
     if stored_capacity_result:
         r = stored_capacity_result["result"]
+        verification = summarize_max_load_verification(r)
 
-        if r.status == "RESULT":
-            if r.coverage_status == "FULL CORE COVERAGE":
-                st.success(f"Capacity ceiling found. Limiting factor: {r.limiting_constraint}.")
-            else:
-                st.warning(
-                    f"Provisional capacity ceiling found. Limiting factor: {r.limiting_constraint}."
-                )
+        if verification.scope_status == "NOT_VERIFIED":
+            st.warning("A capacity ceiling could not be supported from the supplied information.")
+        elif verification.scope_status == "PARTIAL_SCOPE":
+            st.warning(
+                f"Provisional capacity ceiling found. Limiting factor: {r.limiting_constraint}."
+            )
         else:
-            st.warning("A capacity ceiling could not be verified from the supplied information.")
+            st.success(f"Capacity ceiling found. Limiting factor: {r.limiting_constraint}.")
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Maximum current", f"{r.max_current_a:.1f} A" if r.max_current_a else "—")
         c2.metric("Maximum active load", f"{r.max_kw:.1f} kW" if r.max_kw else "—")
         c3.metric("Maximum apparent load", f"{r.max_kva:.1f} kVA" if r.max_kva else "—")
 
-        if r.missing_core_checks:
+        if verification.blocking_issues:
             with st.expander("Still needs verification"):
-                for x in r.missing_core_checks:
-                    st.write("•", x)
+                for issue in verification.blocking_issues:
+                    st.write(f"• {issue.message}")
 
         if r.constraints:
             with st.expander("What sets the ceiling?"):
@@ -676,10 +675,11 @@ else:
                     label = "← LIMITING" if x.name == r.limiting_constraint else ""
                     st.write(f"**{x.name}: {x.current_a:.1f} A** {label} — {x.detail}")
 
-        if r.limitations:
+        scope_notes = tuple(issue for issue in verification.issues if not issue.blocking)
+        if scope_notes:
             with st.expander("Verification notes"):
-                for x in r.limitations:
-                    st.write("•", x)
+                for issue in scope_notes:
+                    st.write(f"• {issue.message}")
 
         with st.expander("Calculation trace"):
             for x in r.trace:
