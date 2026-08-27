@@ -21,9 +21,9 @@ class UIScopeTests(unittest.TestCase):
         section = self.text.split(
             'st.subheader("Existing supply capacity")', 1
         )[1]
-        self.assertIn("I have a breaker rating", section)
-        self.assertIn("I have an existing cable", section)
-        self.assertIn("I have an outlet / connection rating", section)
+        self.assertIn('"Breaker"', section)
+        self.assertIn('"Cable"', section)
+        self.assertIn('"Outlet / connection"', section)
         self.assertIn(
             "if not (use_breaker or use_cable or use_connection):",
             section,
@@ -45,6 +45,42 @@ class UIScopeTests(unittest.TestCase):
         self.assertNotIn("Consumer load (kW)", section)
         self.assertIn("Maximum active load", section)
         self.assertIn("Still needs verification", section)
+
+    def test_existing_capacity_progressively_reveals_optional_inputs(self):
+        section = self.text.split(
+            'st.subheader("Existing supply capacity")', 1
+        )[1]
+        self.assertIn('value=False,\n                key="cap_have_cable"', section)
+        self.assertIn('if use_cable:', section)
+        self.assertIn('if use_connection:', section)
+        self.assertIn('if use_vd:', section)
+        self.assertIn('help="Rated current printed on the breaker or protective device."', section)
+        self.assertIn('help="Expected operating power factor of the load."', section)
+
+    def test_existing_capacity_hides_stale_results_after_input_changes(self):
+        section = self.text.split(
+            'st.subheader("Existing supply capacity")', 1
+        )[1]
+        self.assertIn('st.session_state["capacity_result"]', section)
+        self.assertIn(
+            'stored_capacity_result["signature"] != capacity_signature',
+            section,
+        )
+        self.assertIn('if stored_capacity_result:', section)
+        self.assertNotIn(
+            "Choose any component(s) you already know.",
+            section,
+        )
+
+    def test_existing_capacity_keeps_result_detail_collapsed(self):
+        section = self.text.split(
+            'st.subheader("Existing supply capacity")', 1
+        )[1]
+        self.assertIn('with st.expander("Still needs verification")', section)
+        self.assertIn('with st.expander("What sets the ceiling?")', section)
+        self.assertIn('with st.expander("Verification notes")', section)
+        self.assertIn('with st.expander("Calculation trace")', section)
+        self.assertNotIn('expanded=True', section)
 
     def test_design_advanced_installation_conditions_do_not_surface_temperature_input(self):
         design = self.text.split(
