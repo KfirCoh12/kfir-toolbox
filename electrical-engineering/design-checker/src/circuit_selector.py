@@ -75,12 +75,17 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
         trace.append(f"Parallel cable request: {data.parallel_runs} runs with acceptable current sharing explicitly confirmed.")
 
     rejected=[]
+    unsupported_conditions: list[str] = []
     sizes=sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
     for size in sizes:
         label = f"{data.parallel_runs} × {size:g} mm²/run" if data.parallel_runs > 1 else f"{size:g} mm²"
         amp=calculate_supported_iz(CableAmpacityInput(material=data.material,cross_section_mm2=size,insulation="xlpe_epr",loaded_conductors=3,installation_method="E",environment="air",ambient_temperature_c=data.ambient_temperature_c,grouped_circuits=data.grouped_circuits,grouping_arrangement=data.grouping_arrangement,parallel_runs=data.parallel_runs,equal_current_sharing_confirmed=data.equal_current_sharing_confirmed,thdi_percent=0.0,neutral_loaded=False))
         if amp.iz_a is None:
-            rejected.append(f"{label}: ampacity not verified for supplied conditions"); continue
+            reasons = tuple(dict.fromkeys(amp.missing_or_unsupported))
+            unsupported_conditions.extend(reasons)
+            detail = "; ".join(reasons) if reasons else "unsupported ampacity conditions"
+            rejected.append(f"{label}: ampacity not verified — {detail}")
+            continue
         if amp.iz_a < breaker:
             rejected.append(f"{label}: aggregate Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A"); continue
         vd=None
@@ -96,7 +101,13 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
         trace.append(f"Selected first supported cable candidate: {label}, aggregate Iz = {amp.iz_a:.1f} A")
         return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, data.parallel_runs, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
 
-    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["No cable in the explicit V0.6 dataset passed all requested checks."]))
+    if unsupported_conditions:
+        unsupported_unique = tuple(dict.fromkeys(unsupported_conditions))
+        limitations.extend(f"Cable ampacity not verified: {reason}." for reason in unsupported_unique)
+        trace.append("Automatic cable selection stopped because one or more installation conditions are outside the explicit ampacity dataset.")
+        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
+
+    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["All requested installation conditions were supported, but no cable in the explicit V0.6 dataset passed the implemented checks."]))
 
 @dataclass(frozen=True)
 class CircuitMaterialOptionsResult:

@@ -63,6 +63,25 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertNotIn("compliant", combined.lower())
         self.assertNotIn("verified protection", combined.lower())
 
+
+    def test_unsupported_ambient_condition_is_not_misreported_as_no_solution(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=60,voltage_v=400,phase="three",power_factor=0.9,ambient_temperature_c=55))
+        self.assertEqual(r.status,"NOT VERIFIED")
+        self.assertIsNone(r.suggested_cable_mm2)
+        self.assertTrue(any("ambient temperature" in x.lower() for x in r.limitations))
+        self.assertTrue(any("ambient temperature" in x.lower() for x in r.rejected_candidates))
+
+    def test_unsupported_group_count_is_reported_with_reason(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=60,voltage_v=400,phase="three",power_factor=0.9,grouped_circuits=10,grouping_arrangement="bunched"))
+        self.assertEqual(r.status,"NOT VERIFIED")
+        self.assertTrue(any("group count" in x.lower() for x in r.limitations))
+        self.assertTrue(any("group count" in x.lower() for x in r.rejected_candidates))
+
+    def test_supported_but_inadequate_dataset_remains_no_supported_solution(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=600,voltage_v=400,phase="three",power_factor=0.9))
+        self.assertEqual(r.status,"NO SUPPORTED SOLUTION")
+        self.assertTrue(any("all requested installation conditions were supported" in x.lower() for x in r.trace))
+
     def test_parallel_runs_require_explicit_current_sharing_confirmation(self):
         r=select_circuit(CircuitSelectionInput(load_type="a",load_value=180,voltage_v=400,phase="three",power_factor=0.9,parallel_runs=2,grouped_circuits=2,grouping_arrangement="bunched"))
         self.assertEqual(r.status,"NOT VERIFIED")
