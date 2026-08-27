@@ -24,6 +24,24 @@ class BoardPlanRequest:
 
 
 @dataclass(frozen=True)
+class BoardCircuitScheduleRow:
+    circuit_id: str
+    description: str
+    phase: Literal["single", "three"]
+    load_type: Literal["kw", "kva", "a"]
+    load_value: float
+    demand_factor: float
+    material: Literal["copper", "aluminium"]
+    design_current_a: float
+    breaker_a: float | None
+    cable_mm2: float | None
+    cable_runs: int | None
+    connection_rating_a: float | None
+    scope_status: BoardScopeStatus
+    blocking_issue_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class BoardPlanResult:
     request: BoardPlanRequest
     circuits: tuple[CircuitDesignResult, ...]
@@ -39,6 +57,30 @@ class BoardPlanResult:
             circuit.request.circuit_id
             for circuit in self.circuits
             if circuit.verification.blocking_issues
+        )
+
+    @property
+    def schedule_rows(self) -> tuple[BoardCircuitScheduleRow, ...]:
+        return tuple(
+            BoardCircuitScheduleRow(
+                circuit_id=circuit.request.circuit_id,
+                description=circuit.request.description,
+                phase=circuit.request.phase,
+                load_type=circuit.request.load_type,
+                load_value=circuit.request.load_value,
+                demand_factor=circuit.request.demand_factor,
+                material=circuit.request.material,
+                design_current_a=circuit.design_current_a,
+                breaker_a=circuit.breaker_a,
+                cable_mm2=circuit.cable_mm2,
+                cable_runs=circuit.cable_runs,
+                connection_rating_a=circuit.connection_rating_a,
+                scope_status=circuit.verification.scope_status,
+                blocking_issue_codes=tuple(
+                    issue.code for issue in circuit.verification.blocking_issues
+                ),
+            )
+            for circuit in self.circuits
         )
 
     @property
