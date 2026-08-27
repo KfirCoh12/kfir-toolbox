@@ -31,6 +31,7 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertEqual(tuple(c.request.circuit_id for c in r.circuits), ("C-01", "C-02", "C-03"))
         self.assertTrue(all(c.breaker_a is not None for c in r.circuits))
         self.assertEqual(r.scope_status, "SUPPORTED_SCOPE")
+        self.assertTrue(r.phase_balancing_implemented)
         self.assertFalse(r.board_level_checks_implemented)
 
     def test_board_exposes_schedule_rows_without_ui_specific_logic(self):
@@ -46,6 +47,7 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0].circuit_id, "C-01")
         self.assertEqual(rows[0].description, "Lighting")
+        self.assertEqual(rows[0].assigned_phase, "3P")
         self.assertEqual(rows[0].load_type, "kw")
         self.assertEqual(rows[0].load_value, 5)
         self.assertGreater(rows[0].design_current_a, 0)
@@ -60,8 +62,59 @@ class BoardPlannerTests(unittest.TestCase):
             circuits=(self._circuit("C-01", "Appliance", phase="single", load_kw=3),),
         ))
         row = r.schedule_rows[0]
+        self.assertEqual(row.assigned_phase, "L1")
         self.assertEqual(row.scope_status, "PARTIAL_SCOPE")
         self.assertIn("cable_dataset_phase_unsupported", row.blocking_issue_codes)
+
+    def test_three_phase_circuit_contributes_equally_to_all_phases(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-BAL-01",
+            description="Three phase balance test",
+            circuits=(self._circuit("C-01", "AHU", phase="three", load_kw=18),),
+        ))
+        balance = r.phase_balance
+        self.assertAlmostEqual(balance.l1_current_a, balance.l2_current_a)
+        self.assertAlmostEqual(balance.l2_current_a, balance.l3_current_a)
+        self.assertAlmostEqual(balance.spread_a, 0.0)
+        self.assertEqual(balance.allocations[0].assigned_phase, "3P")
+
+    def test_single_phase_circuits_are_balanced_largest_first(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-BAL-02",
+            description="Single phase balance test",
+            circuits=(
+                self._circuit("C-01", "Largest", phase="single", load_kw=6),
+                self._circuit("C-02", "Medium", phase="single", load_kw=4),
+                self._circuit("C-03", "Small A", phase="single", load_kw=2),
+                self._circuit("C-04", "Small B", phase="single", load_kw=2),
+            ),
+        ))
+        assigned = {a.circuit_id: a.assigned_phase for a in r.phase_balance.allocations}
+        self.assertEqual(assigned["C-01"], "L1")
+        self.assertEqual(assigned["C-02"], "L2")
+        self.assertEqual(assigned["C-03"], "L3")
+        self.assertEqual(assigned["C-04"], "L3")
+        self.assertAlmostEqual(r.phase_balance.l2_current_a, r.phase_balance.l3_current_a)
+        self.assertGreater(r.phase_balance.l1_current_a, r.phase_balance.l2_current_a)
+        self.assertGreater(r.phase_balance.spread_a, 0.0)
+
+    def test_mixed_board_balancing_preserves_three_phase_base_load(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-BAL-03",
+            description="Mixed balance test",
+            circuits=(
+                self._circuit("C-01", "Three phase base", phase="three", load_kw=12),
+                self._circuit("C-02", "Single phase A", phase="single", load_kw=3),
+                self._circuit("C-03", "Single phase B", phase="single", load_kw=3),
+                self._circuit("C-04", "Single phase C", phase="single", load_kw=3),
+            ),
+        ))
+        balance = r.phase_balance
+        self.assertAlmostEqual(balance.l1_current_a, balance.l2_current_a)
+        self.assertAlmostEqual(balance.l2_current_a, balance.l3_current_a)
+        self.assertAlmostEqual(balance.spread_a, 0.0)
+        assigned = tuple(a.assigned_phase for a in balance.allocations[1:])
+        self.assertEqual(set(assigned), {"L1", "L2", "L3"})
 
     def test_board_exposes_circuits_with_blocking_scope_issues(self):
         r = calculate_board_plan(BoardPlanRequest(
