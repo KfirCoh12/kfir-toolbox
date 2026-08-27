@@ -3,7 +3,12 @@ import streamlit as st
 
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
-from src.circuit_selector import CircuitSelectionInput, explain_circuit_selection, select_material_options
+from src.circuit_selector import (
+    CircuitSelectionInput,
+    assess_installation_support,
+    explain_circuit_selection,
+    select_material_options,
+)
 from src.connection import connection_options_for_phase
 from src.manufacturer_ampacity import get_nhxh_phase_conductor_mm2
 from src.max_load import MaxLoadInput, calculate_max_load
@@ -103,6 +108,32 @@ if mode == "Design a supply":
             grouped = st.number_input("Number of grouped circuits / cables", min_value=1, value=max(1, int(parallel_runs)), step=1, key="design_grouped")
             if grouped > 1:
                 arrangement = st.selectbox("How are they grouped?", ["bunched", "perforated_tray_single_layer", "ladder_single_layer"], format_func=lambda x: {"bunched":"Bunched together", "perforated_tray_single_layer":"Single layer on perforated tray", "ladder_single_layer":"Single layer on ladder"}[x])
+
+        support_inputs = dict(
+            load_type="kw", load_value=load_kw, voltage_v=voltage, phase=phase,
+            power_factor=pf, demand_factor=demand, ambient_temperature_c=ambient,
+            grouped_circuits=grouped, grouping_arrangement=arrangement,
+            parallel_runs=int(parallel_runs), equal_current_sharing_confirmed=equal_current_sharing,
+        )
+        copper_support = assess_installation_support(CircuitSelectionInput(material="copper", **support_inputs))
+        aluminium_support = assess_installation_support(CircuitSelectionInput(material="aluminium", **support_inputs))
+        installation_supported = copper_support.status == "SUPPORTED" and aluminium_support.status == "SUPPORTED"
+        if installation_supported:
+            st.success("Automatic cable-sizing support is available for the current installation conditions in both material datasets.")
+        else:
+            st.warning("Automatic cable sizing is NOT VERIFIED for one or more current installation conditions. The tool can still calculate supported numerical parts without inventing cable data.")
+        with st.expander("Installation support details"):
+            for material_label, support in (("Copper", copper_support), ("Aluminium", aluminium_support)):
+                st.markdown(f"**{material_label}: {support.status}**")
+                if support.supported_conditions:
+                    st.caption("Supported by the current automatic-sizing dataset:")
+                    for condition in support.supported_conditions:
+                        st.write("•", condition)
+                if support.missing_or_unsupported:
+                    st.caption("Missing or outside the current evidence base:")
+                    for reason in support.missing_or_unsupported:
+                        st.write("•", reason)
+
         st.header("Voltage drop")
         check_vd = st.checkbox("Include cable length", value=True)
         length = st.number_input("Cable length (m)", min_value=0.1, value=50.0, step=5.0, disabled=not check_vd)

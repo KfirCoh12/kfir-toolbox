@@ -50,6 +50,29 @@ class UIScopeTests(unittest.TestCase):
         self.assertIn('Automatic cable sizing remains NOT VERIFIED', design)
         self.assertIn('three loaded conductors only', design)
 
+    def test_design_surfaces_backend_installation_support_before_calculation(self):
+        design=self.text.split('if mode == "Design a supply":',1)[1].split('else:\n    st.subheader("Existing supply capacity")',1)[0]
+        support_index=design.index('Installation support details')
+        button_index=design.index('st.button("Suggest supply"')
+        self.assertLess(support_index, button_index)
+        self.assertIn('assess_installation_support', design)
+        self.assertIn('copper_support.status == "SUPPORTED"', design)
+        self.assertIn('aluminium_support.status == "SUPPORTED"', design)
+        self.assertIn('missing_or_unsupported', design)
+        self.assertIn('without inventing cable data', design)
+
+    def test_design_support_preflight_uses_same_installation_inputs_as_selector(self):
+        design=self.text.split('if mode == "Design a supply":',1)[1].split('else:\n    st.subheader("Existing supply capacity")',1)[0]
+        for field in (
+            'phase=phase',
+            'ambient_temperature_c=ambient',
+            'grouped_circuits=grouped',
+            'grouping_arrangement=arrangement',
+            'parallel_runs=int(parallel_runs)',
+            'equal_current_sharing_confirmed=equal_current_sharing',
+        ):
+            self.assertIn(field, design)
+
     def test_product_specification_bloat_not_in_ui(self):
         for term in ("clock position", "IP degree", "identification colour", "interlocking"):
             self.assertNotIn(term, self.text.lower())
