@@ -54,8 +54,25 @@ class UIScopeTests(unittest.TestCase):
         self.assertIn('if use_cable:', section)
         self.assertIn('if use_connection:', section)
         self.assertIn('if use_vd:', section)
-        self.assertIn('help="Rated current printed on the breaker or protective device."', section)
+        self.assertIn(
+            'help="Select the rated current printed on the breaker or protective device."',
+            section,
+        )
         self.assertIn('help="Expected operating power factor of the load."', section)
+
+    def test_existing_breaker_uses_backend_discrete_rating_catalog(self):
+        section = self.text.split(
+            'st.subheader("Existing supply capacity")', 1
+        )[1]
+        self.assertIn("from src.catalogs import BREAKER_RATINGS_A", self.text)
+        self.assertIn('breaker = st.selectbox(', section)
+        self.assertIn('"Breaker rating In (A)"', section)
+        self.assertIn("BREAKER_RATINGS_A", section)
+        self.assertIn("index=BREAKER_RATINGS_A.index(63)", section)
+        breaker_block = section.split('"Breaker rating In (A)"', 1)[1].split(
+            "material =", 1
+        )[0]
+        self.assertNotIn("st.number_input", breaker_block)
 
     def test_existing_capacity_hides_stale_results_after_input_changes(self):
         section = self.text.split(
