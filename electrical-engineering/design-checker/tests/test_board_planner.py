@@ -1,6 +1,10 @@
 import unittest
 
-from src.board_planner import BoardPlanRequest, calculate_board_plan
+from src.board_planner import (
+    BoardPhasePreference,
+    BoardPlanRequest,
+    calculate_board_plan,
+)
 from src.circuit_engine import CircuitDesignRequest
 
 
@@ -49,6 +53,7 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertEqual(rows[0].circuit_id, "C-01")
         self.assertEqual(rows[0].description, "Lighting")
         self.assertEqual(rows[0].assigned_phase, "3P")
+        self.assertTrue(rows[0].phase_locked)
         self.assertEqual(rows[0].load_type, "kw")
         self.assertEqual(rows[0].load_value, 5)
         self.assertGreater(rows[0].design_current_a, 0)
@@ -64,6 +69,7 @@ class BoardPlannerTests(unittest.TestCase):
         ))
         row = r.schedule_rows[0]
         self.assertEqual(row.assigned_phase, "L1")
+        self.assertFalse(row.phase_locked)
         self.assertEqual(row.scope_status, "PARTIAL_SCOPE")
         self.assertIn("cable_dataset_phase_unsupported", row.blocking_issue_codes)
 
@@ -78,6 +84,7 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(balance.l2_current_a, balance.l3_current_a)
         self.assertAlmostEqual(balance.spread_a, 0.0)
         self.assertEqual(balance.allocations[0].assigned_phase, "3P")
+        self.assertTrue(balance.allocations[0].locked)
 
     def test_single_phase_circuits_are_balanced_largest_first(self):
         r = calculate_board_plan(BoardPlanRequest(
@@ -98,6 +105,52 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(r.phase_balance.l2_current_a, r.phase_balance.l3_current_a)
         self.assertGreater(r.phase_balance.l1_current_a, r.phase_balance.l2_current_a)
         self.assertGreater(r.phase_balance.spread_a, 0.0)
+
+    def test_locked_phase_is_respected_and_unlocked_circuits_balance_around_it(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-BAL-LOCK-01",
+            description="Locked phase balance test",
+            circuits=(
+                self._circuit("C-01", "Locked large", phase="single", load_kw=6),
+                self._circuit("C-02", "Auto A", phase="single", load_kw=4),
+                self._circuit("C-03", "Auto B", phase="single", load_kw=4),
+            ),
+            phase_preferences=(BoardPhasePreference("C-01", "L3"),),
+        ))
+        allocations = {a.circuit_id: a for a in r.phase_balance.allocations}
+        self.assertEqual(allocations["C-01"].assigned_phase, "L3")
+        self.assertTrue(allocations["C-01"].locked)
+        self.assertEqual({allocations["C-02"].assigned_phase, allocations["C-03"].assigned_phase}, {"L1", "L2"})
+        self.assertFalse(allocations["C-02"].locked)
+        self.assertFalse(allocations["C-03"].locked)
+        row = next(row for row in r.schedule_rows if row.circuit_id == "C-01")
+        self.assertTrue(row.phase_locked)
+
+    def test_invalid_phase_preferences_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown circuit"):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-BAL-LOCK-02",
+                description="Unknown preference",
+                circuits=(self._circuit("C-01", "Load", phase="single", load_kw=2),),
+                phase_preferences=(BoardPhasePreference("C-99", "L1"),),
+            ))
+        with self.assertRaisesRegex(ValueError, "single-phase circuit"):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-BAL-LOCK-03",
+                description="Three phase preference",
+                circuits=(self._circuit("C-01", "Load", phase="three", load_kw=10),),
+                phase_preferences=(BoardPhasePreference("C-01", "L1"),),
+            ))
+        with self.assertRaisesRegex(ValueError, "duplicate phase preference"):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-BAL-LOCK-04",
+                description="Duplicate preference",
+                circuits=(self._circuit("C-01", "Load", phase="single", load_kw=2),),
+                phase_preferences=(
+                    BoardPhasePreference("C-01", "L1"),
+                    BoardPhasePreference("C-01", "L2"),
+                ),
+            ))
 
     def test_mixed_board_balancing_preserves_three_phase_base_load(self):
         r = calculate_board_plan(BoardPlanRequest(
@@ -127,7 +180,6 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertEqual(candidate.status, "CANDIDATE")
         self.assertAlmostEqual(candidate.required_current_a, r.phase_balance.max_phase_current_a)
         self.assertEqual(candidate.breaker_rating_a, 32.0)
-        self.assertIn("no additional board-level diversity", candidate.basis)
         self.assertIn("no additional board-level diversity", candidate.basis.lower())
         self.assertIn("protection verification", candidate.basis.lower())
 
