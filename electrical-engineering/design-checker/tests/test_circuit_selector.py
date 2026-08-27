@@ -69,13 +69,15 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertEqual(r.status,"NOT VERIFIED")
         self.assertIsNone(r.suggested_cable_mm2)
         self.assertTrue(any("ambient temperature" in x.lower() for x in r.limitations))
-        self.assertTrue(any("ambient temperature" in x.lower() for x in r.rejected_candidates))
+        self.assertTrue(any("ambient temperature" in x.lower() for x in r.limitations))
+        self.assertEqual(r.rejected_candidates, tuple())
 
     def test_unsupported_group_count_is_reported_with_reason(self):
         r=select_circuit(CircuitSelectionInput(load_type="a",load_value=60,voltage_v=400,phase="three",power_factor=0.9,grouped_circuits=10,grouping_arrangement="bunched"))
         self.assertEqual(r.status,"NOT VERIFIED")
         self.assertTrue(any("group count" in x.lower() for x in r.limitations))
-        self.assertTrue(any("group count" in x.lower() for x in r.rejected_candidates))
+        self.assertTrue(any("group count" in x.lower() for x in r.limitations))
+        self.assertEqual(r.rejected_candidates, tuple())
 
     def test_supported_but_inadequate_dataset_remains_no_supported_solution(self):
         r=select_circuit(CircuitSelectionInput(load_type="a",load_value=600,voltage_v=400,phase="three",power_factor=0.9))
