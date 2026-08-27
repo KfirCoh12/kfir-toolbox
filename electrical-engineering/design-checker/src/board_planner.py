@@ -23,12 +23,19 @@ IncomerCandidateStatus = Literal["CANDIDATE", "NO_CANDIDATE"]
 
 
 @dataclass(frozen=True)
+class BoardPhasePreference:
+    circuit_id: str
+    phase: BoardPhase
+
+
+@dataclass(frozen=True)
 class BoardPlanRequest:
     board_id: str
     description: str
     circuits: tuple[CircuitDesignRequest, ...]
     line_to_line_voltage_v: float = 400.0
     line_to_neutral_voltage_v: float = 230.0
+    phase_preferences: tuple[BoardPhasePreference, ...] = tuple()
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,7 @@ class BoardPhaseAllocation:
     circuit_id: str
     assigned_phase: SchedulePhase
     design_current_a: float
+    locked: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,7 @@ class BoardCircuitScheduleRow:
     description: str
     phase: Literal["single", "three"]
     assigned_phase: SchedulePhase
+    phase_locked: bool
     load_type: Literal["kw", "kva", "a"]
     load_value: float
     demand_factor: float
@@ -105,7 +114,7 @@ class BoardPlanResult:
     @property
     def schedule_rows(self) -> tuple[BoardCircuitScheduleRow, ...]:
         assigned = {
-            allocation.circuit_id: allocation.assigned_phase
+            allocation.circuit_id: allocation
             for allocation in self.phase_balance.allocations
         }
         return tuple(
@@ -113,7 +122,8 @@ class BoardPlanResult:
                 circuit_id=circuit.request.circuit_id,
                 description=circuit.request.description,
                 phase=circuit.request.phase,
-                assigned_phase=assigned[circuit.request.circuit_id],
+                assigned_phase=assigned[circuit.request.circuit_id].assigned_phase,
+                phase_locked=assigned[circuit.request.circuit_id].locked,
                 load_type=circuit.request.load_type,
                 load_value=circuit.request.load_value,
                 demand_factor=circuit.request.demand_factor,
@@ -179,14 +189,38 @@ def _validate_board_system(data: BoardPlanRequest) -> None:
             )
 
 
+def _validate_phase_preferences(data: BoardPlanRequest) -> dict[str, BoardPhase]:
+    circuit_by_id = {c.circuit_id.strip(): c for c in data.circuits}
+    preferences: dict[str, BoardPhase] = {}
+    for preference in data.phase_preferences:
+        circuit_id = preference.circuit_id.strip()
+        if not circuit_id:
+            raise ValueError("phase preference circuit_id is required")
+        if preference.phase not in ("L1", "L2", "L3"):
+            raise ValueError("phase preference must be L1, L2 or L3")
+        if circuit_id in preferences:
+            raise ValueError(f"duplicate phase preference for circuit {circuit_id}")
+        circuit = circuit_by_id.get(circuit_id)
+        if circuit is None:
+            raise ValueError(f"phase preference references unknown circuit {circuit_id}")
+        if circuit.phase != "single":
+            raise ValueError(
+                f"phase preference can only be applied to a single-phase circuit: {circuit_id}"
+            )
+        preferences[circuit_id] = preference.phase
+    return preferences
+
+
 def _balance_phases(
     circuits: tuple[CircuitDesignResult, ...],
+    preferences: dict[str, BoardPhase],
 ) -> BoardPhaseBalance:
-    """Allocate single-phase circuits using a deterministic largest-first heuristic.
+    """Allocate single-phase circuits around any locked phase preferences.
 
-    Three-phase design current is treated as an equal per-phase contribution. Single-
-    phase circuits are sorted by descending design current and each is placed on the
-    phase with the lowest accumulated current. Ties resolve L1, then L2, then L3.
+    Three-phase design current is treated as an equal per-phase contribution. Locked
+    single-phase circuits are applied next. Remaining single-phase circuits are sorted
+    by descending design current and placed on the phase with the lowest accumulated
+    current. Ties resolve L1, then L2, then L3.
 
     This is a planning heuristic only. No acceptable imbalance threshold or standards
     compliance claim is introduced here.
@@ -203,20 +237,36 @@ def _balance_phases(
                 circuit_id=circuit.request.circuit_id,
                 assigned_phase="3P",
                 design_current_a=current,
+                locked=True,
             ))
 
-    single_phase = sorted(
-        (c for c in circuits if c.request.phase == "single"),
+    single_phase = tuple(c for c in circuits if c.request.phase == "single")
+    for circuit in single_phase:
+        circuit_id = circuit.request.circuit_id.strip()
+        if circuit_id not in preferences:
+            continue
+        assigned = preferences[circuit_id]
+        phase_currents[assigned] += circuit.design_current_a
+        allocations.append(BoardPhaseAllocation(
+            circuit_id=circuit.request.circuit_id,
+            assigned_phase=assigned,
+            design_current_a=circuit.design_current_a,
+            locked=True,
+        ))
+
+    unlocked = sorted(
+        (c for c in single_phase if c.request.circuit_id.strip() not in preferences),
         key=lambda c: (-c.design_current_a, c.request.circuit_id),
     )
     phase_order: tuple[BoardPhase, ...] = ("L1", "L2", "L3")
-    for circuit in single_phase:
+    for circuit in unlocked:
         assigned = min(phase_order, key=lambda phase: phase_currents[phase])
         phase_currents[assigned] += circuit.design_current_a
         allocations.append(BoardPhaseAllocation(
             circuit_id=circuit.request.circuit_id,
             assigned_phase=assigned,
             design_current_a=circuit.design_current_a,
+            locked=False,
         ))
 
     allocation_by_id = {a.circuit_id: a for a in allocations}
@@ -265,8 +315,9 @@ def calculate_board_plan(data: BoardPlanRequest) -> BoardPlanResult:
         raise ValueError("circuit_id values must be unique within a board")
 
     _validate_board_system(data)
+    preferences = _validate_phase_preferences(data)
     circuits = tuple(calculate_circuit_design(circuit) for circuit in data.circuits)
-    phase_balance = _balance_phases(circuits)
+    phase_balance = _balance_phases(circuits, preferences)
     return BoardPlanResult(
         request=data,
         circuits=circuits,
