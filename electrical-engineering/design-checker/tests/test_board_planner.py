@@ -33,6 +33,36 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertEqual(r.scope_status, "SUPPORTED_SCOPE")
         self.assertFalse(r.board_level_checks_implemented)
 
+    def test_board_exposes_schedule_rows_without_ui_specific_logic(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-01A",
+            description="Schedule test board",
+            circuits=(
+                self._circuit("C-01", "Lighting", load_kw=5),
+                self._circuit("C-02", "AHU", load_kw=18),
+            ),
+        ))
+        rows = r.schedule_rows
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].circuit_id, "C-01")
+        self.assertEqual(rows[0].description, "Lighting")
+        self.assertEqual(rows[0].load_type, "kw")
+        self.assertEqual(rows[0].load_value, 5)
+        self.assertGreater(rows[0].design_current_a, 0)
+        self.assertIsNotNone(rows[0].breaker_a)
+        self.assertIsNotNone(rows[0].cable_mm2)
+        self.assertEqual(rows[0].scope_status, "SUPPORTED_SCOPE")
+
+    def test_schedule_row_exposes_blocking_issue_codes(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-01B",
+            description="Single phase scope test",
+            circuits=(self._circuit("C-01", "Appliance", phase="single", load_kw=3),),
+        ))
+        row = r.schedule_rows[0]
+        self.assertEqual(row.scope_status, "PARTIAL_SCOPE")
+        self.assertIn("cable_dataset_phase_unsupported", row.blocking_issue_codes)
+
     def test_board_exposes_circuits_with_blocking_scope_issues(self):
         r = calculate_board_plan(BoardPlanRequest(
             board_id="DB-02",
