@@ -82,6 +82,16 @@ class UIScopeTests(unittest.TestCase):
         self.assertIn('with st.expander("Calculation trace")', section)
         self.assertNotIn('expanded=True', section)
 
+    def test_existing_capacity_renders_backend_verification_summary(self):
+        section = self.text.split(
+            'st.subheader("Existing supply capacity")', 1
+        )[1]
+        self.assertIn("summarize_max_load_verification(r)", section)
+        self.assertIn('verification.scope_status == "NOT_VERIFIED"', section)
+        self.assertIn('verification.scope_status == "PARTIAL_SCOPE"', section)
+        self.assertIn("verification.blocking_issues", section)
+        self.assertNotIn('if r.coverage_status == "FULL CORE COVERAGE"', section)
+
     def test_design_advanced_installation_conditions_do_not_surface_temperature_input(self):
         design = self.text.split(
             'if mode == "Design a supply":', 1
@@ -208,6 +218,19 @@ class UIScopeTests(unittest.TestCase):
             design,
         )
         self.assertIn('with st.expander("Why this suggestion?")', design)
+
+    def test_design_renders_backend_verification_summary(self):
+        design = self.text.split(
+            'if mode == "Design a supply":', 1
+        )[1].split(
+            'else:\n    st.subheader("Existing supply capacity")', 1
+        )[0]
+        self.assertIn("summarize_circuit_selection_verification(r)", design)
+        self.assertIn("verification.scope_status", design)
+        self.assertIn("verification.blocking_issues", design)
+        self.assertIn("issue.code", design)
+        self.assertNotIn('if r.status == "SUGGESTION"', design)
+        self.assertNotIn('elif r.status == "NO SUPPORTED SOLUTION"', design)
 
     def test_compact_field_width_is_enforced_in_ui_css(self):
         self.assertIn('[data-testid="stNumberInput"],', self.text)
