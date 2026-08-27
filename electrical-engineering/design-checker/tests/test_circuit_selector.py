@@ -1,5 +1,5 @@
 import unittest
-from src.circuit_selector import CircuitSelectionInput, select_circuit, select_material_options
+from src.circuit_selector import CircuitSelectionInput, explain_circuit_selection, select_circuit, select_material_options
 
 class CircuitSelectorTests(unittest.TestCase):
     def test_selects_first_supported_cable_that_carries_breaker(self):
@@ -38,5 +38,29 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertEqual(options.aluminium.suggested_cable_mm2,10.0)
         self.assertGreater(options.copper.cable_iz_a,options.aluminium.cable_iz_a)
         self.assertLess(options.copper.voltage_drop.voltage_drop_percent,options.aluminium.voltage_drop.voltage_drop_percent)
+
+    def test_explanation_traces_breaker_cable_and_connection_choices(self):
+        r=select_circuit(CircuitSelectionInput(load_type="kw",load_value=30,voltage_v=400,phase="three",power_factor=0.9,demand_factor=0.8))
+        e=explain_circuit_selection(r)
+        self.assertIn("40 A", e.breaker_reason)
+        self.assertIn("Ib", e.breaker_reason)
+        self.assertIn("10 mm²", e.cable_reason)
+        self.assertIn("Iz", e.cable_reason)
+        self.assertIn("63 A", e.connection_reason)
+        self.assertIn("Ib", e.summary)
+
+    def test_explanation_preserves_reasons_smaller_cables_were_rejected(self):
+        r=select_circuit(CircuitSelectionInput(load_type="a",load_value=60,voltage_v=400,phase="three",power_factor=0.9,length_m=200,permitted_voltage_drop_percent=5.0,voltage_drop_limit_source="Project criterion",allow_annex_g_defaults=True))
+        e=explain_circuit_selection(r)
+        self.assertTrue(e.why_not_smaller)
+        self.assertTrue(any("voltage drop" in x.lower() or "Iz" in x for x in e.why_not_smaller))
+        self.assertIn("passes", e.voltage_drop_reason.lower())
+
+    def test_explanation_does_not_claim_protection_compliance(self):
+        r=select_circuit(CircuitSelectionInput(load_type="kw",load_value=30,voltage_v=400,phase="three",power_factor=0.9,demand_factor=0.8))
+        e=explain_circuit_selection(r)
+        combined=" ".join((e.summary,e.breaker_reason,e.cable_reason,e.connection_reason,e.voltage_drop_reason or ""))
+        self.assertNotIn("compliant", combined.lower())
+        self.assertNotIn("verified protection", combined.lower())
 
 if __name__=="__main__": unittest.main()

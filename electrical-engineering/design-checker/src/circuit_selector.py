@@ -96,3 +96,84 @@ def select_material_options(data: CircuitSelectionInput) -> CircuitMaterialOptio
         copper=select_circuit(replace(data, material="copper")),
         aluminium=select_circuit(replace(data, material="aluminium")),
     )
+
+
+@dataclass(frozen=True)
+class CircuitSelectionExplanation:
+    summary: str
+    breaker_reason: str
+    cable_reason: str
+    connection_reason: str
+    voltage_drop_reason: str | None
+    why_not_smaller: tuple[str, ...]
+
+
+def explain_circuit_selection(result: CircuitSelectionResult) -> CircuitSelectionExplanation:
+    """Turn a selector result into concise engineering-facing reasons.
+
+    Explanations only describe decisions already made by the tested selector;
+    they do not introduce new sizing rules or compliance claims.
+    """
+    ib = result.current.design_current_a
+    if result.suggested_breaker_a is None:
+        breaker_reason = f"No declared breaker candidate is available at or above Ib {ib:.1f} A."
+    else:
+        headroom = result.suggested_breaker_a - ib
+        breaker_reason = (
+            f"{result.suggested_breaker_a:.0f} A is the first declared breaker candidate at or above "
+            f"Ib {ib:.1f} A ({headroom:.1f} A numerical headroom)."
+        )
+
+    if result.suggested_cable_mm2 is None or result.cable_iz_a is None:
+        cable_reason = "No supported cable candidate was selected for these conditions."
+    else:
+        cable_reason = (
+            f"{result.suggested_cable_mm2:g} mm² is the first supported candidate "
+            f"that passed the implemented checks; Iz {result.cable_iz_a:.1f} A"
+        )
+        if result.suggested_breaker_a is not None:
+            cable_reason += f" ≥ In {result.suggested_breaker_a:.0f} A"
+        cable_reason += "."
+
+    connection = result.suggested_connection
+    if connection is None:
+        connection_reason = "No connection recommendation is available."
+    elif connection.rating_a is None:
+        connection_reason = (
+            "A fixed connection / dedicated isolating arrangement is suggested because the required "
+            "current is above the mapped plug/socket rating classes."
+        )
+    else:
+        required = result.suggested_breaker_a or ib
+        connection_reason = (
+            f"{connection.rating_a:.0f} A is the first mapped {connection.category.replace('_', ' ')} "
+            f"rating that can accommodate the {required:.0f} A circuit requirement."
+        )
+
+    vd_reason = None
+    if result.voltage_drop is not None:
+        vd = result.voltage_drop
+        if vd.comparison == "PASS":
+            vd_reason = f"Voltage drop is {vd.voltage_drop_percent:.2f}% and passes the supplied limit."
+        elif vd.comparison == "FAIL":
+            vd_reason = f"Voltage drop is {vd.voltage_drop_percent:.2f}% and exceeds the supplied limit."
+        else:
+            vd_reason = f"Voltage drop is {vd.voltage_drop_percent:.2f}%; no sourced permitted limit was checked."
+
+    chain = [f"Ib {ib:.1f} A"]
+    if result.suggested_breaker_a is not None:
+        chain.append(f"{result.suggested_breaker_a:.0f} A breaker")
+    if result.suggested_cable_mm2 is not None:
+        chain.append(f"{result.suggested_cable_mm2:g} mm² cable")
+    if connection is not None:
+        chain.append(f"{connection.rating_a:.0f} A connection" if connection.rating_a is not None else "fixed connection")
+    summary = " → ".join(chain)
+
+    return CircuitSelectionExplanation(
+        summary=summary,
+        breaker_reason=breaker_reason,
+        cable_reason=cable_reason,
+        connection_reason=connection_reason,
+        voltage_drop_reason=vd_reason,
+        why_not_smaller=result.rejected_candidates,
+    )

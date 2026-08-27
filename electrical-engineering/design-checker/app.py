@@ -3,7 +3,7 @@ import streamlit as st
 
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
-from src.circuit_selector import CircuitSelectionInput, select_material_options
+from src.circuit_selector import CircuitSelectionInput, explain_circuit_selection, select_material_options
 from src.connection import connection_options_for_phase
 from src.manufacturer_ampacity import get_nhxh_phase_conductor_mm2
 from src.max_load import MaxLoadInput, calculate_max_load
@@ -118,6 +118,18 @@ if mode == "Design a supply":
         c3.metric("Copper cable", f"{r.suggested_cable_mm2:g} mm²" if r.suggested_cable_mm2 else "—")
         c4.metric("Aluminium cable", f"{r_al.suggested_cable_mm2:g} mm²" if r_al.suggested_cable_mm2 else "—")
         c5.metric("Connection", f"{r.suggested_connection.rating_a:.0f} A" if r.suggested_connection and r.suggested_connection.rating_a else "Fixed")
+        explanation = explain_circuit_selection(r)
+        st.markdown("### Why this suggestion?")
+        st.write(f"**{explanation.summary}**")
+        st.write("**Breaker:**", explanation.breaker_reason)
+        st.write("**Copper cable:**", explanation.cable_reason)
+        st.write("**Connection:**", explanation.connection_reason)
+        if explanation.voltage_drop_reason:
+            st.write("**Voltage drop:**", explanation.voltage_drop_reason)
+        if explanation.why_not_smaller:
+            with st.expander("Why not a smaller copper cable?"):
+                for reason in explanation.why_not_smaller:
+                    st.write("•", reason)
         if r.suggested_cable_mm2 and r_al.suggested_cable_mm2:
             st.markdown("**Cable comparison**")
             left,right=st.columns(2)
