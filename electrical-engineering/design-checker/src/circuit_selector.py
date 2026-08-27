@@ -30,6 +30,70 @@ class CircuitSelectionInput:
     voltage_drop_limit_source: str | None = None
     allow_annex_g_defaults: bool = False
 
+
+@dataclass(frozen=True)
+class InstallationSupportAssessment:
+    status: Literal["SUPPORTED", "NOT VERIFIED"]
+    supported_conditions: tuple[str, ...]
+    missing_or_unsupported: tuple[str, ...]
+
+
+def assess_installation_support(data: CircuitSelectionInput) -> InstallationSupportAssessment:
+    """Preflight whether the requested installation conditions fit the narrow automatic ampacity dataset.
+
+    The probe uses a cross-section already present in the material dataset so the result
+    reflects installation-condition support rather than candidate cable size. It does not
+    add or approximate any engineering data.
+    """
+    if data.phase != "three":
+        return InstallationSupportAssessment(
+            "NOT VERIFIED",
+            tuple(),
+            ("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.",),
+        )
+    if data.parallel_runs <= 0:
+        raise ValueError("parallel_runs must be greater than 0")
+
+    sizes = sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
+    if not sizes:
+        return InstallationSupportAssessment(
+            "NOT VERIFIED", tuple(), (f"No automatic ampacity dataset is mapped for conductor material {data.material}.",)
+        )
+
+    probe = calculate_supported_iz(CableAmpacityInput(
+        material=data.material,
+        cross_section_mm2=sizes[0],
+        insulation="xlpe_epr",
+        loaded_conductors=3,
+        installation_method="E",
+        environment="air",
+        ambient_temperature_c=data.ambient_temperature_c,
+        grouped_circuits=data.grouped_circuits,
+        grouping_arrangement=data.grouping_arrangement,
+        parallel_runs=data.parallel_runs,
+        equal_current_sharing_confirmed=data.equal_current_sharing_confirmed,
+        thdi_percent=0.0,
+        neutral_loaded=False,
+    ))
+    if probe.iz_a is None:
+        return InstallationSupportAssessment(
+            "NOT VERIFIED", tuple(), tuple(dict.fromkeys(probe.missing_or_unsupported))
+        )
+
+    supported = [
+        "XLPE/EPR insulation",
+        "IEC reference Method E",
+        "air installation",
+        "three loaded conductors",
+        f"ambient air temperature {data.ambient_temperature_c:g} °C",
+        f"group count {data.grouped_circuits}",
+    ]
+    if data.grouped_circuits > 1 and data.grouping_arrangement:
+        supported.append(f"grouping arrangement {data.grouping_arrangement}")
+    if data.parallel_runs > 1:
+        supported.append(f"{data.parallel_runs} parallel runs with acceptable current sharing confirmed")
+    return InstallationSupportAssessment("SUPPORTED", tuple(supported), tuple())
+
 @dataclass(frozen=True)
 class CircuitSelectionResult:
     status: Literal["SUGGESTION", "NO SUPPORTED SOLUTION", "NOT VERIFIED"]
@@ -73,6 +137,13 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
             limitations.append("Grouped circuits / cables must include at least all parallel runs before aggregate ampacity can be verified.")
             return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
         trace.append(f"Parallel cable request: {data.parallel_runs} runs with acceptable current sharing explicitly confirmed.")
+
+    support = assess_installation_support(data)
+    if support.status == "NOT VERIFIED":
+        limitations.extend(f"Cable ampacity not verified: {reason}." for reason in support.missing_or_unsupported)
+        trace.append("Installation support preflight = NOT VERIFIED: " + "; ".join(support.missing_or_unsupported))
+        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+    trace.append("Installation support preflight = SUPPORTED for the narrow automatic ampacity dataset.")
 
     rejected=[]
     unsupported_conditions: list[str] = []

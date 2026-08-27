@@ -1,5 +1,5 @@
 import unittest
-from src.circuit_selector import CircuitSelectionInput, explain_circuit_selection, select_circuit, select_material_options
+from src.circuit_selector import CircuitSelectionInput, assess_installation_support, explain_circuit_selection, select_circuit, select_material_options
 
 class CircuitSelectorTests(unittest.TestCase):
     def test_selects_first_supported_cable_that_carries_breaker(self):
@@ -108,5 +108,36 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertEqual(r.status,"SUGGESTION")
         self.assertTrue(any("Voltage-drop current per run" in x for x in r.trace))
         self.assertTrue(any("identical run" in x for x in r.limitations))
+
+    def test_installation_support_preflight_reports_supported_conditions(self):
+        a = assess_installation_support(CircuitSelectionInput(
+            load_type="kw", load_value=30, voltage_v=400, phase="three", power_factor=0.9,
+            ambient_temperature_c=30, grouped_circuits=1,
+        ))
+        self.assertEqual(a.status, "SUPPORTED")
+        self.assertIn("IEC reference Method E", a.supported_conditions)
+        self.assertIn("ambient air temperature 30 °C", a.supported_conditions)
+        self.assertEqual(a.missing_or_unsupported, tuple())
+
+    def test_installation_support_preflight_reports_unsupported_reason_before_iteration(self):
+        data = CircuitSelectionInput(
+            load_type="kw", load_value=30, voltage_v=400, phase="three", power_factor=0.9,
+            ambient_temperature_c=55, grouped_circuits=1,
+        )
+        a = assess_installation_support(data)
+        self.assertEqual(a.status, "NOT VERIFIED")
+        self.assertTrue(any("ambient temperature" in x for x in a.missing_or_unsupported))
+        r = select_circuit(data)
+        self.assertEqual(r.status, "NOT VERIFIED")
+        self.assertEqual(r.rejected_candidates, tuple())
+        self.assertTrue(any("Installation support preflight = NOT VERIFIED" in x for x in r.trace))
+
+    def test_installation_support_preflight_does_not_treat_parallel_guard_as_supported(self):
+        a = assess_installation_support(CircuitSelectionInput(
+            load_type="a", load_value=100, voltage_v=400, phase="three", power_factor=0.9,
+            parallel_runs=2, equal_current_sharing_confirmed=False, grouped_circuits=2, grouping_arrangement="bunched",
+        ))
+        self.assertEqual(a.status, "NOT VERIFIED")
+        self.assertTrue(any("parallel runs require explicit confirmation" in x for x in a.missing_or_unsupported))
 
 if __name__=="__main__": unittest.main()
