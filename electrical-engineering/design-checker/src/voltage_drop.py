@@ -8,6 +8,13 @@ from dataclasses import dataclass
 from math import sqrt
 from typing import Literal
 
+from .validation import (
+    require_choice,
+    require_nonnegative_finite,
+    require_positive_finite,
+    require_unit_interval,
+)
+
 Phase = Literal["single", "three"]
 Material = Literal["copper", "aluminium"]
 SupplyType = Literal["public_lv", "private_lv"]
@@ -51,6 +58,11 @@ def annex_g_guidance_limit_percent(
     main_wiring_length_m: float | None = None,
 ) -> float:
     """Return Annex G informative guidance, including its long-run allowance."""
+    require_choice("supply_type", supply_type, ("public_lv", "private_lv"))
+    require_choice("use_type", use_type, ("lighting", "other"))
+    if main_wiring_length_m is not None:
+        require_positive_finite("main_wiring_length_m", main_wiring_length_m)
+
     base = ANNEX_G_GUIDANCE_LIMIT_PERCENT[(supply_type, use_type)]
     if main_wiring_length_m is None or main_wiring_length_m <= 100:
         return base
@@ -89,39 +101,50 @@ def calculate_voltage_drop(
         ("cross_section_mm2", cross_section_mm2),
         ("system_voltage_v", system_voltage_v),
     ):
-        if value <= 0:
-            raise ValueError(f"{name} must be greater than 0")
+        require_positive_finite(name, value)
+
+    require_choice("phase", phase, ("single", "three"))
+    require_choice("material", material, ("copper", "aluminium"))
 
     trace: list[str] = []
 
     if power_factor is None:
         if not allow_annex_g_defaults:
-            raise ValueError("power_factor is required unless Annex G defaults are explicitly allowed")
+            raise ValueError(
+                "power_factor is required unless Annex G defaults are explicitly allowed"
+            )
         power_factor = 0.8
-        trace.append("Power factor defaulted to 0.8 using IEC 60364-5-52:2009 Annex G guidance.")
-    if not 0 < power_factor <= 1:
-        raise ValueError("power_factor must be greater than 0 and at most 1")
+        trace.append(
+            "Power factor defaulted to 0.8 using IEC 60364-5-52:2009 Annex G guidance."
+        )
+    require_unit_interval("power_factor", power_factor)
 
     if resistivity_ohm_mm2_per_m is None:
         if not allow_annex_g_defaults:
-            raise ValueError("resistivity is required unless Annex G defaults are explicitly allowed")
+            raise ValueError(
+                "resistivity is required unless Annex G defaults are explicitly allowed"
+            )
         resistivity_ohm_mm2_per_m = ANNEX_G_RESISTIVITY_OHM_MM2_PER_M[material]
         trace.append(
             f"Resistivity defaulted to {resistivity_ohm_mm2_per_m:.6g} ohm·mm²/m "
             f"for {material} using Annex G normal-service guidance."
         )
-    elif resistivity_ohm_mm2_per_m <= 0:
-        raise ValueError("resistivity_ohm_mm2_per_m must be greater than 0")
+    else:
+        require_positive_finite(
+            "resistivity_ohm_mm2_per_m", resistivity_ohm_mm2_per_m
+        )
 
     if reactance_ohm_per_m is None:
         if not allow_annex_g_defaults:
-            raise ValueError("reactance is required unless Annex G defaults are explicitly allowed")
+            raise ValueError(
+                "reactance is required unless Annex G defaults are explicitly allowed"
+            )
         reactance_ohm_per_m = ANNEX_G_REACTANCE_OHM_PER_M
         trace.append(
             f"Reactance defaulted to {reactance_ohm_per_m:.6g} ohm/m using Annex G guidance."
         )
-    elif reactance_ohm_per_m < 0:
-        raise ValueError("reactance_ohm_per_m cannot be negative")
+    else:
+        require_nonnegative_finite("reactance_ohm_per_m", reactance_ohm_per_m)
 
     if impedance_source:
         trace.append(f"User-supplied impedance source: {impedance_source}")
@@ -130,31 +153,38 @@ def calculate_voltage_drop(
     u0 = system_voltage_v / sqrt(3) if phase == "three" else system_voltage_v
     sin_phi = sqrt(max(0.0, 1.0 - power_factor**2))
 
-    resistive_term = resistivity_ohm_mm2_per_m * length_m / cross_section_mm2 * power_factor
+    resistive_term = (
+        resistivity_ohm_mm2_per_m * length_m / cross_section_mm2 * power_factor
+    )
     reactive_term = reactance_ohm_per_m * length_m * sin_phi
     voltage_drop_v = b * (resistive_term + reactive_term) * current_a
     voltage_drop_percent = 100.0 * voltage_drop_v / u0
 
-    trace.extend((
-        f"Phase coefficient b = {b:.0f}",
-        f"U0 = {u0:.6f} V (line-to-neutral basis)",
-        f"sin(phi) = {sin_phi:.6f}",
-        f"Resistive term = rho × L / S × cos(phi) = {resistive_term:.9f} ohm",
-        f"Reactive term = X × L × sin(phi) = {reactive_term:.9f} ohm",
-        f"Voltage drop u = {voltage_drop_v:.6f} V",
-        f"Voltage drop = 100 × u / U0 = {voltage_drop_percent:.6f}%",
-    ))
+    trace.extend(
+        (
+            f"Phase coefficient b = {b:.0f}",
+            f"U0 = {u0:.6f} V (line-to-neutral basis)",
+            f"sin(phi) = {sin_phi:.6f}",
+            f"Resistive term = rho × L / S × cos(phi) = {resistive_term:.9f} ohm",
+            f"Reactive term = X × L × sin(phi) = {reactive_term:.9f} ohm",
+            f"Voltage drop u = {voltage_drop_v:.6f} V",
+            f"Voltage drop = 100 × u / U0 = {voltage_drop_percent:.6f}%",
+        )
+    )
 
     if permitted_limit_percent is None:
         comparison = "NO LIMIT CHECKED"
         standards_status = "CALCULATED — IEC ANNEX G METHOD; LIMIT NOT VERIFIED"
     else:
-        if permitted_limit_percent <= 0:
-            raise ValueError("permitted_limit_percent must be greater than 0")
+        require_positive_finite("permitted_limit_percent", permitted_limit_percent)
         if not limit_source:
             raise ValueError("limit_source is required when a permitted limit is supplied")
-        comparison = "PASS" if voltage_drop_percent <= permitted_limit_percent else "FAIL"
-        standards_status = "CALCULATED — LIMIT SOURCE EXPLICIT; IEC ANNEX G IS INFORMATIVE"
+        comparison = (
+            "PASS" if voltage_drop_percent <= permitted_limit_percent else "FAIL"
+        )
+        standards_status = (
+            "CALCULATED — LIMIT SOURCE EXPLICIT; IEC ANNEX G IS INFORMATIVE"
+        )
         trace.append(
             f"Limit comparison: {voltage_drop_percent:.6f}% <= {permitted_limit_percent:.6f}%: "
             f"{comparison} ({limit_source})"
