@@ -5,13 +5,13 @@ from src.circuit_engine import CircuitDesignRequest
 
 
 class BoardPlannerTests(unittest.TestCase):
-    def _circuit(self, circuit_id, description, *, phase="three", load_kw=10):
+    def _circuit(self, circuit_id, description, *, phase="three", load_kw=10, voltage_v=None):
         return CircuitDesignRequest(
             circuit_id=circuit_id,
             description=description,
             load_type="kw",
             load_value=load_kw,
-            voltage_v=400 if phase == "three" else 230,
+            voltage_v=voltage_v if voltage_v is not None else (400 if phase == "three" else 230),
             phase=phase,
             power_factor=0.9,
             material="copper",
@@ -115,6 +115,50 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertAlmostEqual(balance.spread_a, 0.0)
         assigned = tuple(a.assigned_phase for a in balance.allocations[1:])
         self.assertEqual(set(assigned), {"L1", "L2", "L3"})
+
+    def test_board_supply_voltage_contract_accepts_declared_custom_system(self):
+        r = calculate_board_plan(BoardPlanRequest(
+            board_id="DB-SYS-01",
+            description="Custom voltage board",
+            line_to_line_voltage_v=415,
+            line_to_neutral_voltage_v=240,
+            circuits=(
+                self._circuit("C-01", "Three phase", phase="three", voltage_v=415),
+                self._circuit("C-02", "Single phase", phase="single", load_kw=2, voltage_v=240),
+            ),
+        ))
+        self.assertEqual(r.request.line_to_line_voltage_v, 415)
+        self.assertEqual(r.request.line_to_neutral_voltage_v, 240)
+
+    def test_board_rejects_circuit_voltage_that_does_not_match_supply_system(self):
+        with self.assertRaisesRegex(ValueError, "does not match the board line-to-line voltage"):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-SYS-02",
+                description="Mismatched board",
+                circuits=(self._circuit("C-01", "Wrong voltage", phase="three", voltage_v=415),),
+            ))
+        with self.assertRaisesRegex(ValueError, "does not match the board line-to-neutral voltage"):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-SYS-03",
+                description="Mismatched board",
+                circuits=(self._circuit("C-01", "Wrong voltage", phase="single", voltage_v=240),),
+            ))
+
+    def test_board_rejects_non_positive_or_non_finite_supply_voltage(self):
+        with self.assertRaises(ValueError):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-SYS-04",
+                description="Bad voltage",
+                circuits=(self._circuit("C-01", "Load"),),
+                line_to_line_voltage_v=0,
+            ))
+        with self.assertRaises(ValueError):
+            calculate_board_plan(BoardPlanRequest(
+                board_id="DB-SYS-05",
+                description="Bad voltage",
+                circuits=(self._circuit("C-01", "Load"),),
+                line_to_line_voltage_v=float("nan"),
+            ))
 
     def test_board_exposes_circuits_with_blocking_scope_issues(self):
         r = calculate_board_plan(BoardPlanRequest(
