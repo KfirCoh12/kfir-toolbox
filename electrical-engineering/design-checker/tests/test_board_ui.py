@@ -25,6 +25,12 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('"Delete selected circuit"', self.text)
         self.assertIn('st.markdown("### Properties")', self.text)
 
+    def test_new_board_starts_without_demo_consumers(self):
+        self.assertIn('def default_circuits():', self.text)
+        self.assertIn('"""Start a new board without demo consumers."""', self.text)
+        self.assertIn('return []', self.text)
+        self.assertNotIn('"uid": "seed-1"', self.text)
+
     def test_board_ui_builds_live_sld_before_calculation(self):
         self.assertIn("render_board_graph_svg", self.text)
         self.assertIn("components.html(svg", self.text)
