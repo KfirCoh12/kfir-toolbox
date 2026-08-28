@@ -13,21 +13,13 @@ from .board_planner import BoardPhasePreference, BoardPlanRequest, BoardPlanResu
 from .circuit_engine import CircuitDesignRequest
 
 ElectricalNodeKind = Literal[
-    "source",
-    "incomer",
-    "busbar",
-    "protective_device",
-    "cable",
-    "load",
-    "sub_board",
+    "source", "incomer", "busbar", "protective_device", "cable", "load", "sub_board",
 ]
 CircuitPhase = Literal["single", "three"]
 CircuitMaterial = Literal["copper", "aluminium"]
 PhasePreference = Literal["Auto", "L1", "L2", "L3"]
 ScopeStatus = Literal["SUPPORTED_SCOPE", "PARTIAL_SCOPE", "NOT_VERIFIED"]
 
-# Conservative radial topology only. Richer arrangements (ATS, bus couplers, parallel
-# sources) should be introduced explicitly rather than silently accepted here.
 _ALLOWED_CHILD_KINDS: dict[ElectricalNodeKind, tuple[ElectricalNodeKind, ...]] = {
     "source": ("incomer",),
     "incomer": ("busbar",),
@@ -47,16 +39,12 @@ class ElectricalNode:
     parent_id: str | None
     circuit_id: str | None = None
     board_ref: str | None = None
-
-    # Load/circuit design inputs. These live on the load node in the current model.
     load_kw: float | None = None
     phase: CircuitPhase | None = None
     power_factor: float | None = None
     demand_factor: float | None = None
     material: CircuitMaterial | None = None
     phase_preference: PhasePreference = "Auto"
-
-    # Calculated/enriched values used by schedule and SLD views.
     rating_a: float | None = None
     cable_mm2: float | None = None
     cable_runs: int | None = None
@@ -115,8 +103,7 @@ class BoardElectricalGraph:
 
 
 def _validate_parent_child(parent: ElectricalNode, child: ElectricalNode) -> None:
-    allowed = _ALLOWED_CHILD_KINDS[parent.kind]
-    if child.kind not in allowed:
+    if child.kind not in _ALLOWED_CHILD_KINDS[parent.kind]:
         raise ValueError(
             f"invalid electrical hierarchy: {parent.kind} cannot directly feed {child.kind}"
         )
@@ -156,9 +143,6 @@ def validate_board_graph(graph: BoardElectricalGraph) -> None:
     if graph.root_nodes[0].kind != "source":
         raise ValueError("board hierarchy root must be a source")
 
-    # In the currently supported radial model each source/sub-board owns one incomer,
-    # and each incomer owns one busbar. Multiple incomers/bus sections require a later
-    # explicit topology extension rather than being interpreted accidentally.
     for node in graph.nodes:
         children = graph.children_of(node.node_id)
         if node.kind in ("source", "sub_board"):
@@ -195,14 +179,9 @@ def validate_board_graph(graph: BoardElectricalGraph) -> None:
         raise ValueError("sub_board board_ref cannot equal the root board_id")
 
 
-def make_radial_board_graph(
-    *,
-    board_id: str,
-    description: str,
-    line_to_line_voltage_v: float = 400.0,
-    line_to_neutral_voltage_v: float = 230.0,
-) -> BoardElectricalGraph:
-    """Create the minimal live board hierarchy: source -> incomer -> busbar."""
+def make_radial_board_graph(*, board_id: str, description: str,
+                            line_to_line_voltage_v: float = 400.0,
+                            line_to_neutral_voltage_v: float = 230.0) -> BoardElectricalGraph:
     graph = BoardElectricalGraph(
         board_id=board_id,
         description=description,
@@ -218,20 +197,12 @@ def make_radial_board_graph(
     return graph
 
 
-def add_radial_circuit(
-    graph: BoardElectricalGraph,
-    *,
-    circuit_id: str,
-    description: str,
-    load_kw: float = 1.0,
-    phase: CircuitPhase = "single",
-    power_factor: float = 0.9,
-    demand_factor: float = 1.0,
-    material: CircuitMaterial = "copper",
-    phase_preference: PhasePreference = "Auto",
-    parent_busbar_id: str = "busbar",
-) -> BoardElectricalGraph:
-    """Add protection -> cable -> load beneath a busbar as one radial circuit branch."""
+def add_radial_circuit(graph: BoardElectricalGraph, *, circuit_id: str, description: str,
+                       load_kw: float = 1.0, phase: CircuitPhase = "single",
+                       power_factor: float = 0.9, demand_factor: float = 1.0,
+                       material: CircuitMaterial = "copper",
+                       phase_preference: PhasePreference = "Auto",
+                       parent_busbar_id: str = "busbar") -> BoardElectricalGraph:
     cid = circuit_id.strip()
     if not cid:
         raise ValueError("circuit_id is required")
@@ -248,39 +219,20 @@ def add_radial_circuit(
     additions = (
         ElectricalNode(device_id, "protective_device", f"{cid} protection", parent_busbar_id, circuit_id=cid),
         ElectricalNode(cable_id, "cable", f"{cid} cable", device_id, circuit_id=cid),
-        ElectricalNode(
-            load_id,
-            "load",
-            description,
-            cable_id,
-            circuit_id=cid,
-            load_kw=load_kw,
-            phase=phase,
-            power_factor=power_factor,
-            demand_factor=demand_factor,
-            material=material,
-            phase_preference=phase_preference,
-        ),
+        ElectricalNode(load_id, "load", description, cable_id, circuit_id=cid,
+                       load_kw=load_kw, phase=phase, power_factor=power_factor,
+                       demand_factor=demand_factor, material=material,
+                       phase_preference=phase_preference),
     )
     updated = replace(graph, nodes=graph.nodes + additions)
     validate_board_graph(updated)
     return updated
 
 
-def add_sub_board_feeder(
-    graph: BoardElectricalGraph,
-    *,
-    feeder_id: str,
-    sub_board_id: str,
-    description: str,
-    parent_busbar_id: str = "busbar",
-) -> BoardElectricalGraph:
-    """Add a downstream radial board without inventing feeder sizing calculations.
-
-    Creates parent busbar -> protective device -> cable -> sub-board -> incomer ->
-    busbar. Feeder protection/cable values intentionally remain unset until a future
-    board-demand engine can calculate them from downstream loads using explicit rules.
-    """
+def add_sub_board_feeder(graph: BoardElectricalGraph, *, feeder_id: str,
+                         sub_board_id: str, description: str,
+                         parent_busbar_id: str = "busbar") -> BoardElectricalGraph:
+    """Add busbar -> feeder device -> cable -> sub-board -> incomer -> busbar."""
     fid = feeder_id.strip()
     child_board_id = sub_board_id.strip()
     child_description = description.strip()
@@ -303,42 +255,16 @@ def add_sub_board_feeder(
 
     prefix = f"{fid}:{child_board_id}"
     additions = (
-        ElectricalNode(
-            f"{fid}:device",
-            "protective_device",
-            f"{fid} feeder protection",
-            parent_busbar_id,
-            circuit_id=fid,
-        ),
-        ElectricalNode(
-            f"{fid}:cable",
-            "cable",
-            f"{fid} feeder cable",
-            f"{fid}:device",
-            circuit_id=fid,
-        ),
-        ElectricalNode(
-            f"{prefix}:board",
-            "sub_board",
-            child_description,
-            f"{fid}:cable",
-            circuit_id=fid,
-            board_ref=child_board_id,
-        ),
-        ElectricalNode(
-            f"{prefix}:incomer",
-            "incomer",
-            f"{child_board_id} incomer",
-            f"{prefix}:board",
-            board_ref=child_board_id,
-        ),
-        ElectricalNode(
-            f"{prefix}:busbar",
-            "busbar",
-            f"{child_board_id} busbar",
-            f"{prefix}:incomer",
-            board_ref=child_board_id,
-        ),
+        ElectricalNode(f"{fid}:device", "protective_device", f"{fid} feeder protection",
+                       parent_busbar_id, circuit_id=fid),
+        ElectricalNode(f"{fid}:cable", "cable", f"{fid} feeder cable",
+                       f"{fid}:device", circuit_id=fid),
+        ElectricalNode(f"{prefix}:board", "sub_board", child_description,
+                       f"{fid}:cable", circuit_id=fid, board_ref=child_board_id),
+        ElectricalNode(f"{prefix}:incomer", "incomer", f"{child_board_id} incomer",
+                       f"{prefix}:board", board_ref=child_board_id),
+        ElectricalNode(f"{prefix}:busbar", "busbar", f"{child_board_id} busbar",
+                       f"{prefix}:incomer", board_ref=child_board_id),
     )
     updated = replace(graph, nodes=graph.nodes + additions)
     validate_board_graph(updated)
@@ -346,12 +272,9 @@ def add_sub_board_feeder(
 
 
 def remove_circuit(graph: BoardElectricalGraph, circuit_id: str) -> BoardElectricalGraph:
-    """Remove a final circuit or a complete downstream feeder/sub-board branch."""
     cid = circuit_id.strip()
-    roots = tuple(
-        node for node in graph.nodes
-        if node.circuit_id == cid and node.kind == "protective_device"
-    )
+    roots = tuple(node for node in graph.nodes
+                  if node.circuit_id == cid and node.kind == "protective_device")
     if not roots:
         return graph
     remove_ids: set[str] = set()
@@ -364,16 +287,18 @@ def remove_circuit(graph: BoardElectricalGraph, circuit_id: str) -> BoardElectri
 
 
 def board_plan_request_from_graph(graph: BoardElectricalGraph) -> BoardPlanRequest:
-    """Translate complete final-load nodes into the existing shared board engine.
+    """Translate only root-board final loads into the existing board engine.
 
-    Downstream board feeders are deliberately excluded: deriving their design current
-    requires board-level downstream demand/diversity rules that are not implemented.
+    Loads beneath a sub-board are intentionally excluded from the root-board phase and
+    incomer calculation. Downstream feeder sizing requires a future board-demand model.
     """
     validate_board_graph(graph)
     circuits: list[CircuitDesignRequest] = []
     preferences: list[BoardPhasePreference] = []
     for node in graph.nodes:
         if node.kind != "load":
+            continue
+        if any(ancestor.kind == "sub_board" for ancestor in graph.ancestors_of(node.node_id)):
             continue
         cid = (node.circuit_id or "").strip()
         if not cid:
@@ -390,27 +315,20 @@ def board_plan_request_from_graph(graph: BoardElectricalGraph) -> BoardPlanReque
             raise ValueError(f"{cid}: material must be copper or aluminium")
         if node.phase == "three" and node.phase_preference != "Auto":
             raise ValueError(f"{cid}: phase preference only applies to single-phase circuits")
-
         circuits.append(CircuitDesignRequest(
-            circuit_id=cid,
-            description=node.label.strip(),
-            load_type="kw",
+            circuit_id=cid, description=node.label.strip(), load_type="kw",
             load_value=node.load_kw,
-            voltage_v=(graph.line_to_line_voltage_v if node.phase == "three" else graph.line_to_neutral_voltage_v),
-            phase=node.phase,
-            power_factor=node.power_factor,
-            demand_factor=node.demand_factor,
-            material=node.material,
+            voltage_v=graph.line_to_line_voltage_v if node.phase == "three" else graph.line_to_neutral_voltage_v,
+            phase=node.phase, power_factor=node.power_factor,
+            demand_factor=node.demand_factor, material=node.material,
         ))
         if node.phase == "single" and node.phase_preference in ("L1", "L2", "L3"):
             preferences.append(BoardPhasePreference(cid, node.phase_preference))
 
     if not circuits:
-        raise ValueError("at least one load circuit is required")
+        raise ValueError("at least one root-board load circuit is required")
     return BoardPlanRequest(
-        board_id=graph.board_id,
-        description=graph.description,
-        circuits=tuple(circuits),
+        board_id=graph.board_id, description=graph.description, circuits=tuple(circuits),
         line_to_line_voltage_v=graph.line_to_line_voltage_v,
         line_to_neutral_voltage_v=graph.line_to_neutral_voltage_v,
         phase_preferences=tuple(preferences),
@@ -418,7 +336,6 @@ def board_plan_request_from_graph(graph: BoardElectricalGraph) -> BoardPlanReque
 
 
 def enrich_graph_with_plan(graph: BoardElectricalGraph, plan: BoardPlanResult) -> BoardElectricalGraph:
-    """Attach calculated final-circuit values to their existing electrical nodes."""
     if plan.request.board_id.strip() != graph.board_id.strip():
         raise ValueError("board plan does not belong to this graph")
     rows = {row.circuit_id: row for row in plan.schedule_rows}
@@ -429,15 +346,13 @@ def enrich_graph_with_plan(graph: BoardElectricalGraph, plan: BoardPlanResult) -
         if row is None:
             enriched.append(node)
             continue
-        common = dict(
-            assigned_phase=row.assigned_phase,
-            scope_status=row.scope_status,
-            issue_codes=row.blocking_issue_codes,
-        )
+        common = dict(assigned_phase=row.assigned_phase, scope_status=row.scope_status,
+                      issue_codes=row.blocking_issue_codes)
         if node.kind == "protective_device":
             enriched.append(replace(node, rating_a=row.breaker_a, **common))
         elif node.kind == "cable":
-            enriched.append(replace(node, cable_mm2=row.cable_mm2, cable_runs=row.cable_runs, **common))
+            enriched.append(replace(node, cable_mm2=row.cable_mm2,
+                                    cable_runs=row.cable_runs, **common))
         elif node.kind == "load":
             enriched.append(replace(node, **common))
         else:
