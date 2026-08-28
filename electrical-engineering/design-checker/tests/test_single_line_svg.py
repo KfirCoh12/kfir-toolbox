@@ -42,6 +42,20 @@ class SingleLineSvgTests(unittest.TestCase):
         self.assertNotIn(">C-01 protection<", svg)
         self.assertNotIn(">C-01 cable<", svg)
 
+    def test_manual_outlet_basis_is_shown_without_fake_kw_load(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="DB-M", description="Manual board"),
+            circuit_id="C-32",
+            description="Known outlet",
+            load_kw=None,
+            phase="three",
+            display_detail="Manual · 32 A outlet",
+        )
+        svg = render_board_graph_svg(graph)
+        self.assertIn("Manual · 32 A outlet", svg)
+        self.assertIn("3P", svg)
+        self.assertNotIn("None kW", svg)
+
     def test_renderer_expands_field_and_child_circuit_with_compact_branch_boxes(self):
         graph = add_field_feeder(
             make_radial_board_graph(board_id="DB-F", description="Field board"),
