@@ -7,6 +7,7 @@ _NODE_WIDTH = 150
 _X_GAP = 185
 _Y_GAP = 115
 _MARGIN = 70
+_MIN_WIDTH = 760
 
 
 def _detail(node: ElectricalNode) -> str:
@@ -45,12 +46,12 @@ def _node_status_class(node: ElectricalNode) -> str:
 def render_board_graph_svg(graph: BoardElectricalGraph) -> str:
     """Render the current electrical hierarchy as an SVG string.
 
-    The layout is deterministic and based only on parent/child relationships. It is
-    intentionally simple, but supports arbitrary depth so sub-board hierarchy can be
-    added without rewriting the renderer.
+    The layout is deterministic and based only on parent/child relationships. The
+    complete hierarchy is centered in the viewport at every size so a small board does
+    not cling to the left edge while larger boards expand symmetrically. It supports
+    arbitrary depth so sub-board hierarchy can be added without rewriting the renderer.
     """
     validate_board_graph(graph)
-    by_id = graph.node_by_id
     children = {node.node_id: list(graph.children_of(node.node_id)) for node in graph.nodes}
     root = graph.root_nodes[0]
 
@@ -67,8 +68,13 @@ def render_board_graph_svg(graph: BoardElectricalGraph) -> str:
             walk(child.node_id, level + 1)
 
     walk(root.node_id, 0)
+
+    leaf_span = max(0, len(leaves) - 1) * _X_GAP
+    natural_width = int((_MARGIN * 2) + leaf_span + _NODE_WIDTH)
+    width = max(_MIN_WIDTH, natural_width)
+    first_leaf_x = (width - leaf_span) / 2
     leaf_x = {
-        node_id: _MARGIN + index * _X_GAP
+        node_id: first_leaf_x + index * _X_GAP
         for index, node_id in enumerate(leaves)
     }
     x: dict[str, float] = {}
@@ -86,7 +92,6 @@ def render_board_graph_svg(graph: BoardElectricalGraph) -> str:
 
     place(root.node_id)
     max_depth = max(depth.values())
-    width = max(760, int((_MARGIN * 2) + max(0, len(leaves) - 1) * _X_GAP + _NODE_WIDTH))
     height = int((_MARGIN * 2) + max_depth * _Y_GAP + 110)
 
     lines: list[str] = []
