@@ -1,8 +1,7 @@
 """Protection hierarchy derived from the electrical board graph.
 
-Selectivity is fundamentally a relationship between upstream and downstream
-protective devices. This module derives those relationships from the board topology
-so future selectivity logic does not require manual device pairing in the UI.
+This module derives nearest upstream/downstream device relationships from topology
+so later coordination logic does not require manual pairing in the UI.
 """
 from dataclasses import dataclass
 
@@ -23,11 +22,11 @@ def _is_protective(node: ElectricalNode) -> bool:
 def protection_relationships(
     graph: BoardElectricalGraph,
 ) -> tuple[ProtectionRelationship, ...]:
-    """Return each protective node paired with its nearest protective ancestor."""
+    """Return each device paired with its nearest device ancestor."""
     validate_board_graph(graph)
     relationships: list[ProtectionRelationship] = []
     for node in graph.nodes:
-        if not _is_protective(node) or node.kind == "incomer":
+        if not _is_protective(node):
             continue
         upstream = next(
             (ancestor for ancestor in graph.ancestors_of(node.node_id) if _is_protective(ancestor)),
