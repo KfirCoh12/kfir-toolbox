@@ -9,13 +9,14 @@ class BoardPlannerUITests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / "pages" / "3_Board_Planner.py"
         ).read_text(encoding="utf-8")
 
-    def test_board_ui_uses_hierarchy_native_backend(self):
+    def test_board_ui_uses_hierarchy_and_branch_engines(self):
         self.assertIn("make_radial_board_graph", self.text)
         self.assertIn("add_radial_circuit", self.text)
         self.assertIn("add_field_feeder", self.text)
         self.assertIn("add_sub_board_feeder", self.text)
-        self.assertIn("board_plan_request_from_graph", self.text)
         self.assertIn("enrich_graph_with_plan", self.text)
+        self.assertIn("FinalBranchDesignRequest", self.text)
+        self.assertIn("calculate_final_branch", self.text)
         self.assertIn("calculate_board_plan", self.text)
         self.assertNotIn("calculate_design_current(", self.text)
 
@@ -42,10 +43,10 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('parent_key', self.text)
 
     def test_user_hierarchy_does_not_expose_protection_or_cable_as_rows(self):
-        self.assertIn("Protection and cable remain backend nodes", self.text)
         self.assertNotIn('f"branch:{uid}:device"', self.text)
         self.assertNotIn('f"branch:{uid}:cable"', self.text)
         self.assertIn('token = f"branch:{uid}"', self.text)
+        self.assertIn("Live derived branch", self.text)
 
     def test_field_and_sub_board_are_direct_add_targets(self):
         self.assertIn('token_to_parent_key[token] = uid', self.text)
@@ -78,31 +79,49 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn("line_to_line_voltage_v=float(voltage_ll)", self.text)
         self.assertIn("line_to_neutral_voltage_v=float(voltage_ln)", self.text)
 
-    def test_calculation_enriches_live_model_and_invalidates_when_inputs_change(self):
-        self.assertIn('calculate = st.button("Calculate board"', self.text)
-        self.assertIn('st.session_state["tree_board_plan"]', self.text)
-        self.assertIn('stored["signature"] != signature', self.text)
-        self.assertIn('st.session_state.pop("tree_board_plan", None)', self.text)
+    def test_final_circuit_exposes_live_auto_manual_modes(self):
+        self.assertIn('"Auto from load"', self.text)
+        self.assertIn('"Manual from outlet"', self.text)
+        self.assertIn('"Outlet / connection"', self.text)
+        self.assertIn("connection_options_for_phase", self.text)
+        self.assertIn('mode=mode', self.text)
+        self.assertIn('connection_option_id=branch.get("connection_option_id")', self.text)
+
+    def test_manual_mode_uses_current_basis_without_inventing_kw(self):
+        self.assertIn('graph_load_kw = None', self.text)
+        self.assertIn('display_detail = f"Manual · {preview.connection_rating_a:g} A outlet"', self.text)
+        self.assertIn('"Manual outlet mode fixes the rated outlet current as the branch requirement', self.text)
+
+    def test_live_board_calculation_replaces_calculate_button(self):
+        self.assertIn('def build_live_root_request(', self.text)
+        self.assertIn('circuits.append(result.circuit.request)', self.text)
+        self.assertIn('live_plan = calculate_board_plan(root_request)', self.text)
+        self.assertNotIn('st.button("Calculate board"', self.text)
+        self.assertNotIn('tree_board_plan', self.text)
+
+    def test_sub_board_children_are_not_flattened_into_root_live_plan(self):
+        self.assertIn('def is_below_sub_board(', self.text)
+        self.assertIn('if branch.get("kind") != "final" or is_below_sub_board(branch):', self.text)
 
     def test_schedule_is_generated_secondary_view(self):
         self.assertIn('with st.expander("Generated circuit schedule")', self.text)
-        self.assertIn("result.schedule_rows", self.text)
+        self.assertIn("live_plan.schedule_rows", self.text)
         self.assertNotIn('st.markdown("### Circuit schedule")', self.text)
 
-    def test_board_ui_surfaces_phase_and_incomer_outputs(self):
-        self.assertIn('m1.metric(', self.text)
-        self.assertIn('"Incomer"', self.text)
+    def test_board_ui_surfaces_live_phase_and_incomer_outputs(self):
+        self.assertIn('st.markdown("### Live board summary")', self.text)
+        self.assertIn('m1.metric("Provisional incomer"', self.text)
         self.assertIn('m2.metric("L1"', self.text)
         self.assertIn('m3.metric("L2"', self.text)
         self.assertIn('m4.metric("L3"', self.text)
         self.assertIn('m5.metric("Spread"', self.text)
 
-    def test_board_ui_keeps_new_hierarchy_limitations_explicit(self):
-        self.assertIn('with st.expander("Needs verification")', self.text)
-        self.assertIn('with st.expander("Board planning assumptions")', self.text)
+    def test_board_ui_keeps_hierarchy_limitations_explicit(self):
+        self.assertIn('with st.expander("Current calculation scope / checks")', self.text)
+        self.assertIn('with st.expander("Branches needing input")', self.text)
         self.assertIn("Field feeder aggregation", self.text)
         self.assertIn("sub-board feeder demand", self.text)
-        self.assertIn("final incomer protection verification", self.text)
+        self.assertIn("final protection verification", self.text)
 
     def test_phase_preference_is_only_exposed_for_single_phase_nodes(self):
         self.assertIn('if new_phase == "single":', self.text)
