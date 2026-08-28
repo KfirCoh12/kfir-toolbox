@@ -17,6 +17,7 @@ from src.board_planner import (
 )
 from src.branch_engine import FinalBranchDesignRequest, calculate_final_branch
 from src.connection import connection_options_for_phase
+from src.field_rollup import calculate_field_rollups, enrich_graph_with_field_rollups
 from src.single_line_svg import render_board_graph_svg
 
 st.set_page_config(
@@ -102,6 +103,8 @@ for branch in branches:
     if branch.get("kind") == "final":
         branch.setdefault("mode", "auto")
         branch.setdefault("connection_option_id", None)
+    elif branch.get("kind") == "field":
+        branch.setdefault("material", "copper")
 
 
 def next_uid(prefix="b"):
@@ -281,6 +284,25 @@ def build_draft_graph(branch_results):
     return graph
 
 
+def field_materials():
+    return {
+        str(branch["field_id"]): branch.get("material", "copper")
+        for branch in branches
+        if branch.get("kind") == "field"
+    }
+
+
+def calculate_current_field_rollups():
+    """Build the current root plan and derive field feeder previews from it."""
+    previews, _ = calculate_branch_previews()
+    graph = build_draft_graph(previews)
+    request = build_live_root_request(previews)
+    if request is None:
+        return graph, None, tuple()
+    plan = calculate_board_plan(request)
+    return graph, plan, calculate_field_rollups(graph, plan, field_materials())
+
+
 def selected_graph_nodes(selected_node, selected_branch):
     if selected_node in ("source", "incomer", "busbar"):
         return (selected_node,)
@@ -437,6 +459,7 @@ with workspace_left:
                 "feeder_id": next_id("F"),
                 "field_id": next_named_id("FIELD", "field_id"),
                 "description": "New field",
+                "material": "copper",
             }
         else:
             branch = {
@@ -600,14 +623,60 @@ with workspace_right:
                 with c2:
                     field_id = st.text_input("Field ID", value=str(selected_branch["field_id"]), key=f"field_id_{uid}")
                 field_description = st.text_input("Field description", value=str(selected_branch["description"]), key=f"field_desc_{uid}")
-                st.caption("Child circuits remain part of this board. Field feeder protection/cable sizing is the next bottom-up aggregation step.")
+                field_material_label = st.selectbox(
+                    "Feeder conductor material",
+                    ["Copper", "Aluminium"],
+                    index=0 if selected_branch.get("material", "copper") == "copper" else 1,
+                    key=f"field_material_{uid}",
+                    help="This is the field feeder cable material; it is independent of the child circuit conductor materials.",
+                )
+                field_material = "copper" if field_material_label == "Copper" else "aluminium"
                 if (
                     feeder_id.strip() != str(selected_branch["feeder_id"]).strip()
                     or field_id.strip() != str(selected_branch["field_id"]).strip()
                     or field_description != selected_branch["description"]
+                    or field_material != selected_branch.get("material", "copper")
                 ):
-                    selected_branch.update({"feeder_id": feeder_id.strip(), "field_id": field_id.strip(), "description": field_description})
+                    selected_branch.update({
+                        "feeder_id": feeder_id.strip(),
+                        "field_id": field_id.strip(),
+                        "description": field_description,
+                        "material": field_material,
+                    })
                     st.rerun()
+
+                try:
+                    _, preview_plan, preview_rollups = calculate_current_field_rollups()
+                    selected_rollup = next(
+                        (item for item in preview_rollups if item.field_ref == str(selected_branch["field_id"])),
+                        None,
+                    )
+                    if selected_rollup is None or selected_rollup.status == "EMPTY":
+                        st.caption("Add calculated child circuits to derive this field feeder.")
+                    elif selected_rollup.status == "OUTSIDE_PLAN_BOUNDARY":
+                        st.caption("This field belongs to a downstream sub-board and waits for that board's own calculation.")
+                    elif selected_rollup.feeder_design is not None:
+                        st.markdown('<div class="derived-title">Live field roll-up</div>', unsafe_allow_html=True)
+                        f1, f2, f3, f4 = st.columns(4)
+                        f1.metric("Max phase", f"{selected_rollup.required_current_a:.1f} A")
+                        f2.metric(
+                            "Feeder breaker",
+                            f"{selected_rollup.feeder_design.breaker_a:.0f} A" if selected_rollup.feeder_design.breaker_a is not None else "—",
+                        )
+                        f3.metric("Feeder cable", cable_label(selected_rollup.feeder_design))
+                        f4.metric("Child circuits", str(len(selected_rollup.descendant_circuit_ids)))
+                        phase_demand = selected_rollup.phase_demand
+                        st.caption(
+                            f"Downstream phase demand: L1 {phase_demand.l1_current_a:.1f} A · "
+                            f"L2 {phase_demand.l2_current_a:.1f} A · L3 {phase_demand.l3_current_a:.1f} A. "
+                            "No additional field diversity is applied."
+                        )
+                        if selected_rollup.contains_single_phase_loads:
+                            st.caption(
+                                "Feeder cable is a planning candidate from the existing three-loaded-conductor route; neutral loading and harmonic effects are not verified."
+                            )
+                except (TypeError, ValueError) as exc:
+                    st.warning(str(exc))
             else:
                 st.markdown("**Sub-board · Auto from downstream board**")
                 c1, c2 = st.columns(2)
@@ -642,9 +711,17 @@ try:
 except (TypeError, ValueError) as exc:
     live_plan_error = str(exc)
 
+field_rollups = tuple()
+field_rollup_error = None
+if draft_graph is not None and live_plan is not None:
+    try:
+        field_rollups = calculate_field_rollups(draft_graph, live_plan, field_materials())
+    except (TypeError, ValueError) as exc:
+        field_rollup_error = str(exc)
+
 st.markdown("---")
 st.markdown("### Live single-line diagram")
-st.markdown('<div class="workflow-note">The diagram and board demand update automatically as you edit. No separate calculate step is required for normal planning.</div>', unsafe_allow_html=True)
+st.markdown('<div class="workflow-note">The diagram, field feeders and board demand update automatically as you edit. No separate calculate step is required for normal planning.</div>', unsafe_allow_html=True)
 
 if graph_error:
     st.error(graph_error)
@@ -652,6 +729,8 @@ elif draft_graph is not None:
     display_graph = draft_graph
     if live_plan is not None:
         display_graph = enrich_graph_with_plan(draft_graph, live_plan)
+    if field_rollups:
+        display_graph = enrich_graph_with_field_rollups(display_graph, field_rollups)
     highlighted = selected_graph_nodes(selected_node, selected_branch)
     svg = render_board_graph_svg(display_graph, highlighted)
     diagram_html = f'<div style="width:100%;height:650px;display:flex;align-items:center;justify-content:center;overflow:hidden;">{svg}</div>'
@@ -693,11 +772,16 @@ else:
             })
         st.dataframe(schedule, hide_index=True, use_container_width=True)
 
+    if field_rollup_error:
+        st.warning(field_rollup_error)
+
     with st.expander("Current calculation scope / checks"):
         st.write(f"• {incomer.basis}")
         st.write("• Automatic phase allocation is a planning heuristic, not an imbalance-compliance check.")
         st.write("• Manual outlet mode fixes the rated outlet current as the branch requirement; it does not invent a consumer load.")
-        st.write("• Field feeder aggregation, sub-board feeder demand, busbar rating, selectivity, fault-level checks and final protection verification are not implemented yet.")
+        st.write("• Field feeders now roll up their calculated child phase currents. The highest phase current is used with no additional field diversity; feeder breaker/cable values remain planning candidates.")
+        st.write("• For fields containing single-phase child circuits, neutral loading and harmonic effects are not verified by the current feeder cable route.")
+        st.write("• Sub-board feeder demand, busbar rating, selectivity, fault-level checks and final protection verification are not implemented yet.")
         blocking = tuple(c for c in live_plan.circuits if c.verification.blocking_issues)
         for circuit_result in blocking:
             st.markdown(f"**{circuit_result.request.circuit_id} · {circuit_result.request.description}**")
