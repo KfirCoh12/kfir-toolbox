@@ -17,13 +17,15 @@ class SingleLineSvgTests(unittest.TestCase):
         self.assertIn("Main busbar", svg)
         self.assertIn("rating pending", svg)
 
-    def test_minimal_board_is_centered_in_default_viewbox(self):
+    def test_minimal_board_is_centered_and_fit_to_view(self):
         graph = make_radial_board_graph(board_id="DB-C", description="Centered board")
         svg = render_board_graph_svg(graph)
-        self.assertIn('viewBox="0 0 760 ', svg)
-        self.assertIn('x="380.0"', svg)
+        self.assertIn('viewBox="0 0 820 ', svg)
+        self.assertIn('x="410.0"', svg)
+        self.assertIn('height="100%"', svg)
+        self.assertIn('preserveAspectRatio="xMidYMid meet"', svg)
 
-    def test_renderer_updates_from_draft_circuit_inputs_without_calculation(self):
+    def test_renderer_collapses_protection_and_cable_into_final_branch_box(self):
         graph = add_radial_circuit(
             make_radial_board_graph(board_id="DB-02", description="Board"),
             circuit_id="C-01",
@@ -32,14 +34,15 @@ class SingleLineSvgTests(unittest.TestCase):
             phase="single",
         )
         svg = render_board_graph_svg(graph)
-        self.assertIn("C-01 protection", svg)
-        self.assertIn("C-01 cable", svg)
-        self.assertIn("Lighting", svg)
+        self.assertIn("C-01 · Lighting", svg)
         self.assertIn("2.5 kW", svg)
         self.assertIn("1P", svg)
+        self.assertIn("protection pending", svg)
         self.assertIn("cable pending", svg)
+        self.assertNotIn(">C-01 protection<", svg)
+        self.assertNotIn(">C-01 cable<", svg)
 
-    def test_renderer_expands_field_and_child_circuit_in_same_live_hierarchy(self):
+    def test_renderer_expands_field_and_child_circuit_with_compact_branch_boxes(self):
         graph = add_field_feeder(
             make_radial_board_graph(board_id="DB-F", description="Field board"),
             feeder_id="F-01",
@@ -54,11 +57,22 @@ class SingleLineSvgTests(unittest.TestCase):
             parent_busbar_id="F-01:LTG:busbar",
         )
         svg = render_board_graph_svg(graph)
-        self.assertIn("F-01 field protection", svg)
         self.assertIn("Lighting field", svg)
+        self.assertIn("LTG · grouped circuits", svg)
+        self.assertIn("F-01 · protection pending · cable pending", svg)
         self.assertIn("LTG busbar", svg)
-        self.assertIn("LTG-01 protection", svg)
-        self.assertIn("Lighting zone A", svg)
+        self.assertIn("LTG-01 · Lighting zone A", svg)
+        self.assertIn("group-green", svg)
+        self.assertNotIn(">F-01 field protection<", svg)
+
+    def test_renderer_can_highlight_selected_visible_object(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="DB-S", description="Selected board"),
+            circuit_id="C-01",
+            description="Selected load",
+        )
+        svg = render_board_graph_svg(graph, ("C-01:load",))
+        self.assertIn("node normal selected", svg)
 
     def test_renderer_escapes_user_labels(self):
         graph = add_radial_circuit(
