@@ -9,6 +9,7 @@ from src.board_graph import (
     enrich_graph_with_plan,
     make_radial_board_graph,
 )
+from src.board_persistence import load_last_board, save_last_board
 from src.board_planner import (
     BoardPhasePreference,
     BoardPlanRequest,
@@ -62,10 +63,39 @@ def default_branches():
     return []
 
 
-if "tree_board_branches" not in st.session_state:
-    st.session_state["tree_board_branches"] = default_branches()
-if "tree_uid_counter" not in st.session_state:
-    st.session_state["tree_uid_counter"] = 100
+def restore_working_board():
+    """Hydrate Streamlit state once from the local working-board autosave."""
+    if st.session_state.get("_tree_persistence_loaded"):
+        return
+
+    saved = None
+    try:
+        saved = load_last_board()
+    except ValueError as exc:
+        st.session_state["_tree_persistence_error"] = str(exc)
+
+    if saved is not None:
+        st.session_state.setdefault("tree_board_branches", saved.get("branches", default_branches()))
+        st.session_state.setdefault("tree_uid_counter", int(saved.get("uid_counter", 100)))
+        st.session_state.setdefault("tree_board_id", str(saved.get("board_id", "DB-01")))
+        st.session_state.setdefault("tree_board_description", str(saved.get("description", "Distribution board")))
+        st.session_state.setdefault("tree_vll", float(saved.get("line_to_line_voltage_v", 400.0)))
+        st.session_state.setdefault("tree_vln", float(saved.get("line_to_neutral_voltage_v", 230.0)))
+        st.session_state.setdefault("tree_selected_node", str(saved.get("selected_node", "busbar")))
+
+    st.session_state.setdefault("tree_board_branches", default_branches())
+    st.session_state.setdefault("tree_uid_counter", 100)
+    st.session_state.setdefault("tree_board_id", "DB-01")
+    st.session_state.setdefault("tree_board_description", "Distribution board")
+    st.session_state.setdefault("tree_vll", 400.0)
+    st.session_state.setdefault("tree_vln", 230.0)
+    st.session_state["_tree_persistence_loaded"] = True
+
+
+restore_working_board()
+
+if st.session_state.get("_tree_persistence_error"):
+    st.warning(st.session_state["_tree_persistence_error"])
 
 branches = st.session_state["tree_board_branches"]
 for branch in branches:
@@ -272,16 +302,16 @@ def cable_label(result):
 
 header_left, header_right = st.columns([1, 1])
 with header_left:
-    board_id = st.text_input("Board ID", value="DB-01", key="tree_board_id")
+    board_id = st.text_input("Board ID", key="tree_board_id")
 with header_right:
-    description = st.text_input("Board description", value="Distribution board", key="tree_board_description")
+    description = st.text_input("Board description", key="tree_board_description")
 
 with st.expander("Board supply"):
     v1, v2, _ = st.columns([1, 1, 2])
     with v1:
-        voltage_ll = st.number_input("Line-line voltage (V)", min_value=1.0, value=400.0, step=5.0, key="tree_vll")
+        voltage_ll = st.number_input("Line-line voltage (V)", min_value=1.0, step=5.0, key="tree_vll")
     with v2:
-        voltage_ln = st.number_input("Line-neutral voltage (V)", min_value=1.0, value=230.0, step=5.0, key="tree_vln")
+        voltage_ln = st.number_input("Line-neutral voltage (V)", min_value=1.0, step=5.0, key="tree_vln")
 
 node_ids = ["source", "incomer", "busbar"]
 labels = {
@@ -681,4 +711,18 @@ if branch_errors:
             label = branch.get("circuit_id", uid) if branch else uid
             st.write(f"• {label}: {message}")
 
+try:
+    save_last_board({
+        "board_id": board_id,
+        "description": description,
+        "line_to_line_voltage_v": float(voltage_ll),
+        "line_to_neutral_voltage_v": float(voltage_ln),
+        "uid_counter": int(st.session_state["tree_uid_counter"]),
+        "selected_node": selected_node,
+        "branches": branches,
+    })
+except OSError as exc:
+    st.warning(f"Could not autosave the current board: {exc}")
+
+st.caption("Autosaved locally on this computer. Pulling new toolbox code will not erase this working board.")
 st.caption("Normal planning is live. A separate full-check action will only be introduced when there are additional explicit checks for it to run.")
