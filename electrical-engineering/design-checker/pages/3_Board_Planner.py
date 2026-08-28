@@ -53,6 +53,7 @@ st.markdown(
 def default_circuits():
     return [
         {
+            "uid": "seed-1",
             "circuit_id": "C-01",
             "description": "Lighting",
             "load_kw": 2.0,
@@ -63,6 +64,7 @@ def default_circuits():
             "phase_preference": "Auto",
         },
         {
+            "uid": "seed-2",
             "circuit_id": "C-02",
             "description": "Sockets",
             "load_kw": 3.0,
@@ -73,6 +75,7 @@ def default_circuits():
             "phase_preference": "Auto",
         },
         {
+            "uid": "seed-3",
             "circuit_id": "C-03",
             "description": "Three-phase load",
             "load_kw": 12.0,
@@ -87,8 +90,12 @@ def default_circuits():
 
 if "tree_board_circuits" not in st.session_state:
     st.session_state["tree_board_circuits"] = default_circuits()
+if "tree_uid_counter" not in st.session_state:
+    st.session_state["tree_uid_counter"] = 100
 
 circuits = st.session_state["tree_board_circuits"]
+for index, circuit in enumerate(circuits):
+    circuit.setdefault("uid", f"legacy-{index}")
 
 header_left, header_right = st.columns([1, 1])
 with header_left:
@@ -125,8 +132,11 @@ with left:
             number = 1
             while f"C-{number:02d}" in existing:
                 number += 1
+            st.session_state["tree_uid_counter"] += 1
+            uid = f"c{st.session_state['tree_uid_counter']}"
             circuits.append(
                 {
+                    "uid": uid,
                     "circuit_id": f"C-{number:02d}",
                     "description": "New load",
                     "load_kw": 1.0,
@@ -137,7 +147,7 @@ with left:
                     "phase_preference": "Auto",
                 }
             )
-            st.session_state["tree_selected_node"] = f"C-{number:02d}:load"
+            st.session_state["tree_next_selected_node"] = f"circuit:{uid}:load"
             st.session_state.pop("tree_board_plan", None)
             st.rerun()
 
@@ -149,18 +159,22 @@ with left:
     }
     node_to_circuit_index = {}
     for index, circuit in enumerate(circuits):
+        uid = circuit["uid"]
         cid = str(circuit["circuit_id"]).strip() or f"row-{index + 1}"
-        device_id = f"{cid}:device"
-        cable_id = f"{cid}:cable"
-        load_id = f"{cid}:load"
-        node_ids.extend([device_id, cable_id, load_id])
+        device_token = f"circuit:{uid}:device"
+        cable_token = f"circuit:{uid}:cable"
+        load_token = f"circuit:{uid}:load"
+        node_ids.extend([device_token, cable_token, load_token])
         branch = "├─" if index < len(circuits) - 1 else "└─"
-        labels[device_id] = f"           {branch} {cid} · Protection"
-        labels[cable_id] = f"           │   └─ Cable"
-        labels[load_id] = f"           │       └─ {circuit['description']}"
-        for node_id in (device_id, cable_id, load_id):
-            node_to_circuit_index[node_id] = index
+        labels[device_token] = f"           {branch} {cid} · Protection"
+        labels[cable_token] = "           │   └─ Cable"
+        labels[load_token] = f"           │       └─ {circuit['description']}"
+        for token in (device_token, cable_token, load_token):
+            node_to_circuit_index[token] = index
 
+    pending_selection = st.session_state.pop("tree_next_selected_node", None)
+    if pending_selection is not None:
+        st.session_state["tree_selected_node"] = pending_selection
     current_selected = st.session_state.get("tree_selected_node", "busbar")
     if current_selected not in node_ids:
         st.session_state["tree_selected_node"] = "busbar"
@@ -182,7 +196,7 @@ with left:
             use_container_width=True,
         ):
             circuits.pop(selected_index)
-            st.session_state["tree_selected_node"] = "busbar"
+            st.session_state["tree_next_selected_node"] = "busbar"
             st.session_state.pop("tree_board_plan", None)
             st.rerun()
 
@@ -202,28 +216,28 @@ with left:
             st.caption("Outgoing branches are connected here. Busbar rating and board construction are not selected yet.")
     else:
         circuit = circuits[selected_index]
-        cid = str(circuit["circuit_id"])
+        uid = circuit["uid"]
         with st.container(border=True):
             id_col, phase_col = st.columns(2)
             with id_col:
                 new_id = st.text_input(
                     "Circuit ID",
-                    value=cid,
-                    key=f"tree_cid_{selected_index}",
+                    value=str(circuit["circuit_id"]),
+                    key=f"tree_cid_{uid}",
                 )
             with phase_col:
                 phase_label = st.selectbox(
                     "Phase",
                     ["Single-phase", "Three-phase"],
                     index=0 if circuit["phase"] == "single" else 1,
-                    key=f"tree_phase_{selected_index}",
+                    key=f"tree_phase_{uid}",
                 )
             new_phase = "single" if phase_label == "Single-phase" else "three"
 
             new_description = st.text_input(
                 "Load / consumer",
                 value=str(circuit["description"]),
-                key=f"tree_desc_{selected_index}",
+                key=f"tree_desc_{uid}",
             )
             load_col, pf_col = st.columns(2)
             with load_col:
@@ -232,7 +246,7 @@ with left:
                     min_value=0.1,
                     value=float(circuit["load_kw"]),
                     step=0.5,
-                    key=f"tree_load_{selected_index}",
+                    key=f"tree_load_{uid}",
                     help="Input the expected load of the consumer.",
                 )
             with pf_col:
@@ -242,7 +256,7 @@ with left:
                     max_value=1.0,
                     value=float(circuit["power_factor"]),
                     step=0.01,
-                    key=f"tree_pf_{selected_index}",
+                    key=f"tree_pf_{uid}",
                 )
 
             demand_col, material_col = st.columns(2)
@@ -253,28 +267,27 @@ with left:
                     max_value=1.0,
                     value=float(circuit["demand_factor"]),
                     step=0.05,
-                    key=f"tree_demand_{selected_index}",
+                    key=f"tree_demand_{uid}",
                 )
             with material_col:
                 material_label = st.selectbox(
                     "Conductor material",
                     ["Copper", "Aluminium"],
                     index=0 if circuit["material"] == "copper" else 1,
-                    key=f"tree_material_{selected_index}",
+                    key=f"tree_material_{uid}",
                 )
             new_material = "copper" if material_label == "Copper" else "aluminium"
 
             phase_preference = "Auto"
             if new_phase == "single":
+                current_preference = circuit.get("phase_preference", "Auto")
+                if current_preference not in ("Auto", "L1", "L2", "L3"):
+                    current_preference = "Auto"
                 phase_preference = st.selectbox(
                     "Phase assignment",
                     ["Auto", "L1", "L2", "L3"],
-                    index=["Auto", "L1", "L2", "L3"].index(
-                        circuit.get("phase_preference", "Auto")
-                        if circuit.get("phase_preference", "Auto") in ("Auto", "L1", "L2", "L3")
-                        else "Auto"
-                    ),
-                    key=f"tree_lock_{selected_index}",
+                    index=["Auto", "L1", "L2", "L3"].index(current_preference),
+                    key=f"tree_lock_{uid}",
                     help="Leave Auto to let the planner balance this single-phase load.",
                 )
 
@@ -289,7 +302,6 @@ with left:
             or phase_preference != circuit.get("phase_preference", "Auto")
         )
         if changed:
-            old_id = str(circuit["circuit_id"]).strip()
             circuit.update(
                 {
                     "circuit_id": new_id.strip(),
@@ -303,8 +315,6 @@ with left:
                 }
             )
             st.session_state.pop("tree_board_plan", None)
-            new_selected = selected_node.replace(old_id, new_id.strip(), 1) if old_id else selected_node
-            st.session_state["tree_selected_node"] = new_selected
             st.rerun()
 
 
