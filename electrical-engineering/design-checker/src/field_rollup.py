@@ -19,6 +19,7 @@ from .board_planner import BoardPlanResult
 from .circuit_engine import CircuitDesignRequest, CircuitDesignResult, calculate_circuit_design
 
 FieldRollupStatus = Literal["PROVISIONAL", "EMPTY", "OUTSIDE_PLAN_BOUNDARY"]
+FieldFeederMaterial = Literal["copper", "aluminium"]
 
 
 @dataclass(frozen=True)
@@ -102,8 +103,14 @@ def _phase_demand(plan: BoardPlanResult, circuit_ids: tuple[str, ...]) -> FieldP
 def calculate_field_rollups(
     graph: BoardElectricalGraph,
     plan: BoardPlanResult,
+    feeder_material_by_field_ref: dict[str, FieldFeederMaterial],
 ) -> tuple[FieldFeederRollup, ...]:
-    """Calculate one planning feeder roll-up for every field in the plan boundary."""
+    """Calculate one planning feeder roll-up for every field in the plan boundary.
+
+    Feeder conductor material is an explicit caller input rather than inferred from
+    child circuits, because the field feeder is its own cable and may use a different
+    material from its downstream final circuits.
+    """
     validate_board_graph(graph)
     if plan.request.board_id.strip() != graph.board_id.strip():
         raise ValueError("board plan does not belong to this graph")
@@ -146,8 +153,9 @@ def calculate_field_rollups(
             ))
             continue
 
-        if field.material not in ("copper", "aluminium"):
-            raise ValueError(f"field {field_ref} requires a feeder conductor material")
+        material = feeder_material_by_field_ref.get(field_ref)
+        if material not in ("copper", "aluminium"):
+            raise ValueError(f"field {field_ref} requires an explicit feeder conductor material")
         contains_single_phase = any(
             circuit_results[circuit_id].request.phase == "single"
             for circuit_id in circuit_ids
@@ -161,7 +169,7 @@ def calculate_field_rollups(
             phase="three",
             power_factor=None,
             demand_factor=1.0,
-            material=field.material,
+            material=material,
         ))
         limitations = [
             "Field feeder current is the highest planned downstream phase current; no additional field diversity is applied.",
@@ -193,6 +201,11 @@ def enrich_graph_with_field_rollups(
     by_rollup = {rollup.field_node_id: rollup for rollup in rollups}
     if len(by_rollup) != len(rollups):
         raise ValueError("field rollups must have unique field_node_id values")
+    rollup_by_feeder = {
+        rollup.feeder_circuit_id: rollup
+        for rollup in rollups
+        if rollup.status == "PROVISIONAL" and rollup.feeder_design is not None
+    }
 
     enriched: list[ElectricalNode] = []
     for node in graph.nodes:
@@ -210,10 +223,7 @@ def enrich_graph_with_field_rollups(
             ))
             continue
 
-        rollup = next(
-            (item for item in rollups if item.feeder_circuit_id == node.circuit_id and item.status == "PROVISIONAL"),
-            None,
-        )
+        rollup = rollup_by_feeder.get(node.circuit_id or "")
         if rollup is None or rollup.feeder_design is None:
             enriched.append(node)
             continue
