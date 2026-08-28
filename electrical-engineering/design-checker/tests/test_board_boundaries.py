@@ -1,6 +1,10 @@
 import unittest
+from dataclasses import replace
 
-from src.board_boundaries import calculation_boundaries_from_graph
+from src.board_boundaries import (
+    calculation_boundaries_from_graph,
+    enrich_graph_with_board_plans,
+)
 from src.board_graph import (
     add_radial_circuit,
     add_sub_board_feeder,
@@ -44,7 +48,7 @@ class BoardCalculationBoundaryTests(unittest.TestCase):
         self.assertEqual(child.description, "Level 1 board")
         self.assertEqual(child.feeder_circuit_id, "F-01")
         self.assertEqual(child.busbar_node_id, "F-01:DB-L1:busbar")
-        self.assertEqual(child.phase_preferences[0].phase if hasattr(child, "phase_preferences") else child.request.phase_preferences[0].phase, "L3")
+        self.assertEqual(child.request.phase_preferences[0].phase, "L3")
 
     def test_downstream_load_is_not_flattened_into_parent_request(self):
         graph = add_radial_circuit(
@@ -144,6 +148,62 @@ class BoardCalculationBoundaryTests(unittest.TestCase):
         self.assertEqual(tuple(c.circuit_id for c in boundaries[1].request.circuits), ("L1-C01",))
         self.assertEqual(tuple(c.circuit_id for c in boundaries[2].request.circuits), ("L2-C01",))
         self.assertEqual(boundaries[2].feeder_circuit_id, "F-02")
+
+    def test_independent_board_plans_enrich_only_their_owned_final_branches(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="MDB", description="Main board"),
+            circuit_id="C-ROOT",
+            description="Root three phase load",
+            phase="three",
+            load_kw=12.0,
+        )
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="F-01",
+            sub_board_id="DB-L1",
+            description="Level 1 board",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="L1-C01",
+            description="Child three phase load",
+            phase="three",
+            load_kw=18.0,
+            parent_busbar_id="F-01:DB-L1:busbar",
+        )
+
+        boundaries = calculation_boundaries_from_graph(graph)
+        plans = tuple(
+            calculate_board_plan(boundary.request)
+            for boundary in boundaries
+            if boundary.request is not None
+        )
+        enriched = enrich_graph_with_board_plans(graph, plans)
+
+        self.assertIsNotNone(enriched.node_by_id["C-ROOT:device"].rating_a)
+        self.assertIsNotNone(enriched.node_by_id["L1-C01:device"].rating_a)
+        self.assertIsNotNone(enriched.node_by_id["L1-C01:cable"].cable_mm2)
+        self.assertEqual(enriched.node_by_id["L1-C01:load"].assigned_phase, "3P")
+        self.assertIsNone(enriched.node_by_id["F-01:device"].rating_a)
+        self.assertIsNone(enriched.node_by_id["F-01:cable"].cable_mm2)
+        self.assertIsNone(enriched.node_by_id["F-01:DB-L1:incomer"].rating_a)
+
+    def test_plan_with_wrong_boundary_circuits_is_rejected(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="MDB", description="Main board"),
+            circuit_id="C-ROOT",
+            description="Root load",
+            phase="three",
+        )
+        boundary = calculation_boundaries_from_graph(graph)[0]
+        result = calculate_board_plan(boundary.request)
+        wrong_request = replace(
+            result.request,
+            circuits=(replace(result.request.circuits[0], circuit_id="OTHER"),),
+        )
+        wrong_result = replace(result, request=wrong_request)
+        with self.assertRaisesRegex(ValueError, "circuits do not match hierarchy boundary"):
+            enrich_graph_with_board_plans(graph, (wrong_result,))
 
 
 if __name__ == "__main__":
