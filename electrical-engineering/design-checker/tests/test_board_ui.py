@@ -12,6 +12,8 @@ class BoardPlannerUITests(unittest.TestCase):
     def test_board_ui_uses_hierarchy_native_backend(self):
         self.assertIn("make_radial_board_graph", self.text)
         self.assertIn("add_radial_circuit", self.text)
+        self.assertIn("add_field_feeder", self.text)
+        self.assertIn("add_sub_board_feeder", self.text)
         self.assertIn("board_plan_request_from_graph", self.text)
         self.assertIn("enrich_graph_with_plan", self.text)
         self.assertIn("calculate_board_plan", self.text)
@@ -21,15 +23,28 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertNotIn("st.data_editor(", self.text)
         self.assertIn('st.markdown("### Electrical hierarchy")', self.text)
         self.assertIn('selected_node = st.radio(', self.text)
-        self.assertIn('"＋ Add outgoing circuit"', self.text)
-        self.assertIn('"Delete selected circuit"', self.text)
+        self.assertIn('"＋ Add branch"', self.text)
+        self.assertIn('"Delete selected branch"', self.text)
         self.assertIn('st.markdown("### Properties")', self.text)
 
-    def test_new_board_starts_without_demo_consumers(self):
-        self.assertIn('def default_circuits():', self.text)
-        self.assertIn('"""Start a new board without demo consumers."""', self.text)
+    def test_new_board_starts_without_demo_branches(self):
+        self.assertIn('def default_branches():', self.text)
+        self.assertIn('"""Start a new board without demo branches."""', self.text)
         self.assertIn('return []', self.text)
         self.assertNotIn('"uid": "seed-1"', self.text)
+
+    def test_branch_type_selector_exposes_final_field_and_sub_board(self):
+        self.assertIn('"Final circuit"', self.text)
+        self.assertIn('"Field / circuit group"', self.text)
+        self.assertIn('"Sub-board"', self.text)
+        self.assertIn('selected_parent_key is None', self.text)
+        self.assertIn('parent_key', self.text)
+
+    def test_nested_branches_are_added_under_selected_busbar(self):
+        self.assertIn('busbar_by_parent_key = {"root": "busbar"}', self.text)
+        self.assertIn('parent_busbar_id=parent_busbar_id', self.text)
+        self.assertIn('token_to_parent_key[f"branch:{uid}:busbar"] = uid', self.text)
+        self.assertIn('append_tree(uid, depth + 1)', self.text)
 
     def test_board_ui_builds_live_sld_before_calculation(self):
         self.assertIn("render_board_graph_svg", self.text)
@@ -64,12 +79,12 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('m4.metric("L3"', self.text)
         self.assertIn('m5.metric("Spread"', self.text)
 
-    def test_board_ui_keeps_scope_limitations_explicit(self):
+    def test_board_ui_keeps_new_hierarchy_limitations_explicit(self):
         self.assertIn('with st.expander("Needs verification")', self.text)
         self.assertIn('with st.expander("Board planning assumptions")', self.text)
-        self.assertIn("Board-level diversity", self.text)
+        self.assertIn("Field feeder aggregation", self.text)
+        self.assertIn("sub-board feeder demand", self.text)
         self.assertIn("final incomer protection verification", self.text)
-        self.assertIn("planning heuristic", self.text)
 
     def test_phase_preference_is_only_exposed_for_single_phase_nodes(self):
         self.assertIn('if new_phase == "single":', self.text)
