@@ -90,7 +90,7 @@ class BoardPlannerUITests(unittest.TestCase):
     def test_manual_mode_uses_current_basis_without_inventing_kw(self):
         self.assertIn('graph_load_kw = None', self.text)
         self.assertIn('display_detail = f"Manual · {preview.connection_rating_a:g} A outlet"', self.text)
-        self.assertIn('"Manual outlet mode fixes the rated outlet current as the branch requirement', self.text)
+        self.assertIn('Manual outlet mode fixes the rated outlet current as the branch requirement', self.text)
 
     def test_live_board_calculation_replaces_calculate_button(self):
         self.assertIn('def build_live_root_request(', self.text)
