@@ -3,7 +3,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from src.board_graph import (
+    add_field_feeder,
     add_radial_circuit,
+    add_sub_board_feeder,
     board_plan_request_from_graph,
     enrich_graph_with_plan,
     make_radial_board_graph,
@@ -50,19 +52,122 @@ st.markdown(
 )
 
 
-def default_circuits():
-    """Start a new board without demo consumers."""
+def default_branches():
+    """Start a new board without demo branches."""
     return []
 
 
-if "tree_board_circuits" not in st.session_state:
-    st.session_state["tree_board_circuits"] = default_circuits()
+if "tree_board_branches" not in st.session_state:
+    st.session_state["tree_board_branches"] = default_branches()
 if "tree_uid_counter" not in st.session_state:
     st.session_state["tree_uid_counter"] = 100
 
-circuits = st.session_state["tree_board_circuits"]
-for index, circuit in enumerate(circuits):
-    circuit.setdefault("uid", f"legacy-{index}")
+branches = st.session_state["tree_board_branches"]
+
+
+def next_uid(prefix="b"):
+    st.session_state["tree_uid_counter"] += 1
+    return f"{prefix}{st.session_state['tree_uid_counter']}"
+
+
+def used_circuit_ids():
+    values = set()
+    for branch in branches:
+        value = branch.get("circuit_id") or branch.get("feeder_id")
+        if value:
+            values.add(str(value).strip())
+    return values
+
+
+def next_id(prefix):
+    used = used_circuit_ids()
+    number = 1
+    while f"{prefix}-{number:02d}" in used:
+        number += 1
+    return f"{prefix}-{number:02d}"
+
+
+def next_named_id(prefix, key):
+    used = {str(branch.get(key, "")).strip() for branch in branches}
+    number = 1
+    while f"{prefix}-{number:02d}" in used:
+        number += 1
+    return f"{prefix}-{number:02d}"
+
+
+def child_branch_uids(parent_uid):
+    direct = [b["uid"] for b in branches if b.get("parent_key") == parent_uid]
+    result = list(direct)
+    for uid in direct:
+        result.extend(child_branch_uids(uid))
+    return result
+
+
+def build_draft_graph():
+    graph = make_radial_board_graph(
+        board_id=board_id,
+        description=description,
+        line_to_line_voltage_v=float(voltage_ll),
+        line_to_neutral_voltage_v=float(voltage_ln),
+    )
+    busbar_by_parent_key = {"root": "busbar"}
+
+    for branch in branches:
+        uid = branch["uid"]
+        parent_key = branch.get("parent_key", "root")
+        parent_busbar_id = busbar_by_parent_key.get(parent_key)
+        if parent_busbar_id is None:
+            raise ValueError(f"Branch {uid} references an unavailable parent hierarchy node.")
+
+        if branch["kind"] == "final":
+            graph = add_radial_circuit(
+                graph,
+                circuit_id=str(branch["circuit_id"]),
+                description=str(branch["description"]),
+                load_kw=float(branch["load_kw"]),
+                phase=branch["phase"],
+                power_factor=float(branch["power_factor"]),
+                demand_factor=float(branch["demand_factor"]),
+                material=branch["material"],
+                phase_preference=branch.get("phase_preference", "Auto"),
+                parent_busbar_id=parent_busbar_id,
+            )
+        elif branch["kind"] == "field":
+            graph = add_field_feeder(
+                graph,
+                feeder_id=str(branch["feeder_id"]),
+                field_id=str(branch["field_id"]),
+                description=str(branch["description"]),
+                parent_busbar_id=parent_busbar_id,
+            )
+            busbar_by_parent_key[uid] = (
+                f"{branch['feeder_id']}:{branch['field_id']}:busbar"
+            )
+        elif branch["kind"] == "sub_board":
+            graph = add_sub_board_feeder(
+                graph,
+                feeder_id=str(branch["feeder_id"]),
+                sub_board_id=str(branch["sub_board_id"]),
+                description=str(branch["description"]),
+                parent_busbar_id=parent_busbar_id,
+            )
+            busbar_by_parent_key[uid] = (
+                f"{branch['feeder_id']}:{branch['sub_board_id']}:busbar"
+            )
+        else:
+            raise ValueError(f"Unsupported branch type: {branch['kind']}")
+    return graph
+
+
+def graph_signature():
+    return (
+        board_id.strip(),
+        description.strip(),
+        float(voltage_ll),
+        float(voltage_ln),
+        tuple(tuple(sorted(branch.items())) for branch in branches),
+    )
+
 
 header_left, header_right = st.columns([1, 1])
 with header_left:
@@ -88,35 +193,9 @@ left, right = st.columns([0.82, 1.18], gap="large")
 with left:
     st.markdown("### Electrical hierarchy")
     st.markdown(
-        '<div class="tree-note">Select a node to inspect or edit it. The schedule is now a generated view, not the design model.</div>',
+        '<div class="tree-note">Select a busbar to add below it. A branch may end in a final load, a field, or a full sub-board.</div>',
         unsafe_allow_html=True,
     )
-
-    add_col, delete_col = st.columns(2)
-    with add_col:
-        if st.button("＋ Add outgoing circuit", use_container_width=True):
-            existing = {str(c["circuit_id"]).strip() for c in circuits}
-            number = 1
-            while f"C-{number:02d}" in existing:
-                number += 1
-            st.session_state["tree_uid_counter"] += 1
-            uid = f"c{st.session_state['tree_uid_counter']}"
-            circuits.append(
-                {
-                    "uid": uid,
-                    "circuit_id": f"C-{number:02d}",
-                    "description": "New load",
-                    "load_kw": 1.0,
-                    "phase": "single",
-                    "power_factor": 0.90,
-                    "demand_factor": 1.00,
-                    "material": "copper",
-                    "phase_preference": "Auto",
-                }
-            )
-            st.session_state["tree_next_selected_node"] = f"circuit:{uid}:load"
-            st.session_state.pop("tree_board_plan", None)
-            st.rerun()
 
     node_ids = ["source", "incomer", "busbar"]
     labels = {
@@ -124,26 +203,58 @@ with left:
         "incomer": "   └─ Main incomer",
         "busbar": "       └─ Main busbar",
     }
-    node_to_circuit_index = {}
-    for index, circuit in enumerate(circuits):
-        uid = circuit["uid"]
-        cid = str(circuit["circuit_id"]).strip() or f"row-{index + 1}"
-        device_token = f"circuit:{uid}:device"
-        cable_token = f"circuit:{uid}:cable"
-        load_token = f"circuit:{uid}:load"
-        node_ids.extend([device_token, cable_token, load_token])
-        branch = "├─" if index < len(circuits) - 1 else "└─"
-        labels[device_token] = f"           {branch} {cid} · Protection"
-        labels[cable_token] = "           │   └─ Cable"
-        labels[load_token] = f"           │       └─ {circuit['description']}"
-        for token in (device_token, cable_token, load_token):
-            node_to_circuit_index[token] = index
+    token_to_uid = {}
+    token_to_parent_key = {"busbar": "root"}
+
+    children_by_parent = {}
+    for branch in branches:
+        children_by_parent.setdefault(branch.get("parent_key", "root"), []).append(branch)
+
+    def append_tree(parent_key, depth):
+        siblings = children_by_parent.get(parent_key, [])
+        for index, branch in enumerate(siblings):
+            uid = branch["uid"]
+            last = index == len(siblings) - 1
+            stem = "└─" if last else "├─"
+            indent = "    " * depth
+            if branch["kind"] == "final":
+                cid = str(branch["circuit_id"]).strip() or "?"
+                tokens = (
+                    (f"branch:{uid}:device", f"{indent}{stem} {cid} · Protection"),
+                    (f"branch:{uid}:cable", f"{indent}    └─ Cable"),
+                    (f"branch:{uid}:endpoint", f"{indent}        └─ {branch['description']}"),
+                )
+            elif branch["kind"] == "field":
+                fid = str(branch["feeder_id"]).strip() or "?"
+                tokens = (
+                    (f"branch:{uid}:device", f"{indent}{stem} {fid} · Field protection"),
+                    (f"branch:{uid}:cable", f"{indent}    └─ Feeder cable"),
+                    (f"branch:{uid}:endpoint", f"{indent}        └─ {branch['description']}"),
+                    (f"branch:{uid}:busbar", f"{indent}            └─ {branch['field_id']} busbar"),
+                )
+            else:
+                fid = str(branch["feeder_id"]).strip() or "?"
+                tokens = (
+                    (f"branch:{uid}:device", f"{indent}{stem} {fid} · Sub-board feeder"),
+                    (f"branch:{uid}:cable", f"{indent}    └─ Feeder cable"),
+                    (f"branch:{uid}:endpoint", f"{indent}        └─ {branch['description']}"),
+                    (f"branch:{uid}:incomer", f"{indent}            └─ {branch['sub_board_id']} incomer"),
+                    (f"branch:{uid}:busbar", f"{indent}                └─ {branch['sub_board_id']} busbar"),
+                )
+            for token, label in tokens:
+                node_ids.append(token)
+                labels[token] = label
+                token_to_uid[token] = uid
+            if branch["kind"] in ("field", "sub_board"):
+                token_to_parent_key[f"branch:{uid}:busbar"] = uid
+                append_tree(uid, depth + 1)
+
+    append_tree("root", 3)
 
     pending_selection = st.session_state.pop("tree_next_selected_node", None)
     if pending_selection is not None:
         st.session_state["tree_selected_node"] = pending_selection
-    current_selected = st.session_state.get("tree_selected_node", "busbar")
-    if current_selected not in node_ids:
+    if st.session_state.get("tree_selected_node", "busbar") not in node_ids:
         st.session_state["tree_selected_node"] = "busbar"
 
     selected_node = st.radio(
@@ -154,180 +265,230 @@ with left:
         key="tree_selected_node",
     )
 
-    selected_index = node_to_circuit_index.get(selected_node)
-    with delete_col:
-        delete_disabled = selected_index is None
-        if st.button(
-            "Delete selected circuit",
-            disabled=delete_disabled,
+    selected_uid = token_to_uid.get(selected_node)
+    selected_branch = next((b for b in branches if b["uid"] == selected_uid), None)
+    selected_parent_key = token_to_parent_key.get(selected_node)
+
+    add_type_col, add_button_col = st.columns([1.15, 1])
+    with add_type_col:
+        new_branch_type = st.selectbox(
+            "Add under selected",
+            ["Final circuit", "Field / circuit group", "Sub-board"],
+            disabled=selected_parent_key is None,
+            help="Select a busbar in the hierarchy, then choose what it feeds.",
+        )
+    with add_button_col:
+        st.write("")
+        add_clicked = st.button(
+            "＋ Add branch",
+            disabled=selected_parent_key is None,
             use_container_width=True,
-        ):
-            circuits.pop(selected_index)
-            st.session_state["tree_next_selected_node"] = "busbar"
-            st.session_state.pop("tree_board_plan", None)
-            st.rerun()
+        )
+
+    if add_clicked:
+        uid = next_uid()
+        if new_branch_type == "Final circuit":
+            branch = {
+                "uid": uid,
+                "kind": "final",
+                "parent_key": selected_parent_key,
+                "circuit_id": next_id("C"),
+                "description": "New load",
+                "load_kw": 1.0,
+                "phase": "single",
+                "power_factor": 0.90,
+                "demand_factor": 1.00,
+                "material": "copper",
+                "phase_preference": "Auto",
+            }
+            next_selected = f"branch:{uid}:endpoint"
+        elif new_branch_type == "Field / circuit group":
+            branch = {
+                "uid": uid,
+                "kind": "field",
+                "parent_key": selected_parent_key,
+                "feeder_id": next_id("F"),
+                "field_id": next_named_id("FIELD", "field_id"),
+                "description": "New field",
+            }
+            next_selected = f"branch:{uid}:busbar"
+        else:
+            branch = {
+                "uid": uid,
+                "kind": "sub_board",
+                "parent_key": selected_parent_key,
+                "feeder_id": next_id("DBF"),
+                "sub_board_id": next_named_id("DB", "sub_board_id"),
+                "description": "New sub-board",
+            }
+            next_selected = f"branch:{uid}:busbar"
+        branches.append(branch)
+        st.session_state["tree_next_selected_node"] = next_selected
+        st.session_state.pop("tree_board_plan", None)
+        st.rerun()
+
+    delete_disabled = selected_branch is None
+    if st.button(
+        "Delete selected branch",
+        disabled=delete_disabled,
+        use_container_width=True,
+    ):
+        remove_uids = {selected_uid, *child_branch_uids(selected_uid)}
+        st.session_state["tree_board_branches"] = [
+            b for b in branches if b["uid"] not in remove_uids
+        ]
+        st.session_state["tree_next_selected_node"] = "busbar"
+        st.session_state.pop("tree_board_plan", None)
+        st.rerun()
 
     st.markdown("### Properties")
     if selected_node == "source":
         with st.container(border=True):
             st.markdown("**Incoming supply**")
             st.write(f"{voltage_ll:g} / {voltage_ln:g} V")
-            st.caption("Supply/source details will expand later with upstream network and fault-level data.")
+            st.caption("Upstream network and fault-level data will be added later.")
     elif selected_node == "incomer":
         with st.container(border=True):
-            st.markdown("**Main incomer**")
-            st.caption("The provisional rating appears after board calculation. Device family and protection verification are not implemented yet.")
+            st.markdown("**Main incomer · Auto**")
+            st.caption("Its rating is derived from downstream board demand when calculation is available. Manual override will be added as a separate mode.")
     elif selected_node == "busbar":
         with st.container(border=True):
-            st.markdown("**Main busbar**")
-            st.caption("Outgoing branches are connected here. Busbar rating and board construction are not selected yet.")
-    else:
-        circuit = circuits[selected_index]
-        uid = circuit["uid"]
+            st.markdown("**Main busbar · Auto**")
+            st.caption("The board starts here. Add a final circuit, field or sub-board below this busbar.")
+    elif selected_branch is not None:
+        uid = selected_branch["uid"]
         with st.container(border=True):
-            id_col, phase_col = st.columns(2)
-            with id_col:
-                new_id = st.text_input(
-                    "Circuit ID",
-                    value=str(circuit["circuit_id"]),
-                    key=f"tree_cid_{uid}",
+            if selected_branch["kind"] == "final":
+                c1, c2 = st.columns(2)
+                with c1:
+                    new_id = st.text_input(
+                        "Circuit ID", value=str(selected_branch["circuit_id"]), key=f"branch_id_{uid}"
+                    )
+                with c2:
+                    phase_label = st.selectbox(
+                        "Phase",
+                        ["Single-phase", "Three-phase"],
+                        index=0 if selected_branch["phase"] == "single" else 1,
+                        key=f"branch_phase_{uid}",
+                    )
+                new_phase = "single" if phase_label == "Single-phase" else "three"
+                new_description = st.text_input(
+                    "Load / consumer",
+                    value=str(selected_branch["description"]),
+                    key=f"branch_desc_{uid}",
                 )
-            with phase_col:
-                phase_label = st.selectbox(
-                    "Phase",
-                    ["Single-phase", "Three-phase"],
-                    index=0 if circuit["phase"] == "single" else 1,
-                    key=f"tree_phase_{uid}",
+                c3, c4 = st.columns(2)
+                with c3:
+                    new_load = st.number_input(
+                        "Expected load (kW)", min_value=0.1,
+                        value=float(selected_branch["load_kw"]), step=0.5,
+                        key=f"branch_load_{uid}"
+                    )
+                with c4:
+                    new_pf = st.number_input(
+                        "Power factor", min_value=0.01, max_value=1.0,
+                        value=float(selected_branch["power_factor"]), step=0.01,
+                        key=f"branch_pf_{uid}"
+                    )
+                c5, c6 = st.columns(2)
+                with c5:
+                    new_demand = st.number_input(
+                        "Demand factor", min_value=0.01, max_value=1.0,
+                        value=float(selected_branch["demand_factor"]), step=0.05,
+                        key=f"branch_demand_{uid}"
+                    )
+                with c6:
+                    material_label = st.selectbox(
+                        "Conductor material", ["Copper", "Aluminium"],
+                        index=0 if selected_branch["material"] == "copper" else 1,
+                        key=f"branch_material_{uid}"
+                    )
+                new_material = "copper" if material_label == "Copper" else "aluminium"
+                phase_preference = "Auto"
+                if new_phase == "single":
+                    current_preference = selected_branch.get("phase_preference", "Auto")
+                    phase_preference = st.selectbox(
+                        "Phase assignment", ["Auto", "L1", "L2", "L3"],
+                        index=["Auto", "L1", "L2", "L3"].index(current_preference),
+                        key=f"branch_lock_{uid}"
+                    )
+                changed = (
+                    new_id.strip() != str(selected_branch["circuit_id"]).strip()
+                    or new_description != selected_branch["description"]
+                    or new_load != selected_branch["load_kw"]
+                    or new_phase != selected_branch["phase"]
+                    or new_pf != selected_branch["power_factor"]
+                    or new_demand != selected_branch["demand_factor"]
+                    or new_material != selected_branch["material"]
+                    or phase_preference != selected_branch.get("phase_preference", "Auto")
                 )
-            new_phase = "single" if phase_label == "Single-phase" else "three"
-
-            new_description = st.text_input(
-                "Load / consumer",
-                value=str(circuit["description"]),
-                key=f"tree_desc_{uid}",
-            )
-            load_col, pf_col = st.columns(2)
-            with load_col:
-                new_load = st.number_input(
-                    "Expected load (kW)",
-                    min_value=0.1,
-                    value=float(circuit["load_kw"]),
-                    step=0.5,
-                    key=f"tree_load_{uid}",
-                    help="Input the expected load of the consumer.",
+                if changed:
+                    selected_branch.update({
+                        "circuit_id": new_id.strip(),
+                        "description": new_description,
+                        "load_kw": float(new_load),
+                        "phase": new_phase,
+                        "power_factor": float(new_pf),
+                        "demand_factor": float(new_demand),
+                        "material": new_material,
+                        "phase_preference": phase_preference if new_phase == "single" else "Auto",
+                    })
+                    st.session_state.pop("tree_board_plan", None)
+                    st.rerun()
+            elif selected_branch["kind"] == "field":
+                st.markdown("**Field / circuit group · Auto**")
+                c1, c2 = st.columns(2)
+                with c1:
+                    feeder_id = st.text_input(
+                        "Field feeder ID", value=str(selected_branch["feeder_id"]), key=f"field_feeder_{uid}"
+                    )
+                with c2:
+                    field_id = st.text_input(
+                        "Field ID", value=str(selected_branch["field_id"]), key=f"field_id_{uid}"
+                    )
+                field_description = st.text_input(
+                    "Field description", value=str(selected_branch["description"]), key=f"field_desc_{uid}"
                 )
-            with pf_col:
-                new_pf = st.number_input(
-                    "Power factor",
-                    min_value=0.01,
-                    max_value=1.0,
-                    value=float(circuit["power_factor"]),
-                    step=0.01,
-                    key=f"tree_pf_{uid}",
+                st.caption("Child circuits contribute to this board. Field feeder aggregation/sizing is still pending and will not be invented.")
+                if (
+                    feeder_id.strip() != str(selected_branch["feeder_id"]).strip()
+                    or field_id.strip() != str(selected_branch["field_id"]).strip()
+                    or field_description != selected_branch["description"]
+                ):
+                    selected_branch.update({
+                        "feeder_id": feeder_id.strip(),
+                        "field_id": field_id.strip(),
+                        "description": field_description,
+                    })
+                    st.session_state.pop("tree_board_plan", None)
+                    st.rerun()
+            else:
+                st.markdown("**Sub-board feeder · Auto**")
+                c1, c2 = st.columns(2)
+                with c1:
+                    feeder_id = st.text_input(
+                        "Feeder ID", value=str(selected_branch["feeder_id"]), key=f"sub_feeder_{uid}"
+                    )
+                with c2:
+                    sub_board_id = st.text_input(
+                        "Sub-board ID", value=str(selected_branch["sub_board_id"]), key=f"sub_board_id_{uid}"
+                    )
+                sub_description = st.text_input(
+                    "Sub-board description", value=str(selected_branch["description"]), key=f"sub_desc_{uid}"
                 )
-
-            demand_col, material_col = st.columns(2)
-            with demand_col:
-                new_demand = st.number_input(
-                    "Demand factor",
-                    min_value=0.01,
-                    max_value=1.0,
-                    value=float(circuit["demand_factor"]),
-                    step=0.05,
-                    key=f"tree_demand_{uid}",
-                )
-            with material_col:
-                material_label = st.selectbox(
-                    "Conductor material",
-                    ["Copper", "Aluminium"],
-                    index=0 if circuit["material"] == "copper" else 1,
-                    key=f"tree_material_{uid}",
-                )
-            new_material = "copper" if material_label == "Copper" else "aluminium"
-
-            phase_preference = "Auto"
-            if new_phase == "single":
-                current_preference = circuit.get("phase_preference", "Auto")
-                if current_preference not in ("Auto", "L1", "L2", "L3"):
-                    current_preference = "Auto"
-                phase_preference = st.selectbox(
-                    "Phase assignment",
-                    ["Auto", "L1", "L2", "L3"],
-                    index=["Auto", "L1", "L2", "L3"].index(current_preference),
-                    key=f"tree_lock_{uid}",
-                    help="Leave Auto to let the planner balance this single-phase load.",
-                )
-
-        changed = (
-            new_id.strip() != str(circuit["circuit_id"]).strip()
-            or new_description != circuit["description"]
-            or new_load != circuit["load_kw"]
-            or new_phase != circuit["phase"]
-            or new_pf != circuit["power_factor"]
-            or new_demand != circuit["demand_factor"]
-            or new_material != circuit["material"]
-            or phase_preference != circuit.get("phase_preference", "Auto")
-        )
-        if changed:
-            circuit.update(
-                {
-                    "circuit_id": new_id.strip(),
-                    "description": new_description,
-                    "load_kw": float(new_load),
-                    "phase": new_phase,
-                    "power_factor": float(new_pf),
-                    "demand_factor": float(new_demand),
-                    "material": new_material,
-                    "phase_preference": phase_preference if new_phase == "single" else "Auto",
-                }
-            )
-            st.session_state.pop("tree_board_plan", None)
-            st.rerun()
-
-
-def build_draft_graph():
-    graph = make_radial_board_graph(
-        board_id=board_id,
-        description=description,
-        line_to_line_voltage_v=float(voltage_ll),
-        line_to_neutral_voltage_v=float(voltage_ln),
-    )
-    for circuit in circuits:
-        graph = add_radial_circuit(
-            graph,
-            circuit_id=str(circuit["circuit_id"]),
-            description=str(circuit["description"]),
-            load_kw=float(circuit["load_kw"]),
-            phase=circuit["phase"],
-            power_factor=float(circuit["power_factor"]),
-            demand_factor=float(circuit["demand_factor"]),
-            material=circuit["material"],
-            phase_preference=circuit.get("phase_preference", "Auto"),
-        )
-    return graph
-
-
-def graph_signature():
-    return (
-        board_id.strip(),
-        description.strip(),
-        float(voltage_ll),
-        float(voltage_ln),
-        tuple(
-            (
-                str(c["circuit_id"]).strip(),
-                str(c["description"]),
-                float(c["load_kw"]),
-                c["phase"],
-                float(c["power_factor"]),
-                float(c["demand_factor"]),
-                c["material"],
-                c.get("phase_preference", "Auto"),
-            )
-            for c in circuits
-        ),
-    )
-
+                st.caption("A sub-board is a separate calculation boundary. Its demand is not yet propagated into the upstream feeder.")
+                if (
+                    feeder_id.strip() != str(selected_branch["feeder_id"]).strip()
+                    or sub_board_id.strip() != str(selected_branch["sub_board_id"]).strip()
+                    or sub_description != selected_branch["description"]
+                ):
+                    selected_branch.update({
+                        "feeder_id": feeder_id.strip(),
+                        "sub_board_id": sub_board_id.strip(),
+                        "description": sub_description,
+                    })
+                    st.session_state.pop("tree_board_plan", None)
+                    st.rerun()
 
 try:
     draft_graph = build_draft_graph()
@@ -344,7 +505,7 @@ if stored and stored["signature"] != signature:
 
 with right:
     st.markdown("### Live single-line diagram")
-    st.caption("The drawing follows the draft hierarchy immediately. Calculated values enrich it after planning.")
+    st.caption("The drawing follows the hierarchy immediately. Calculated final-circuit values enrich it after planning.")
 
     if graph_error:
         st.error(graph_error)
@@ -353,8 +514,7 @@ with right:
         if stored:
             display_graph = enrich_graph_with_plan(draft_graph, stored["result"])
         svg = render_board_graph_svg(display_graph)
-        branch_count = len(circuits)
-        height = max(500, min(900, 430 + branch_count * 18))
+        height = max(500, min(1000, 350 + len(display_graph.nodes) * 28))
         components.html(svg, height=height, scrolling=True)
 
     calculate = st.button("Calculate board", type="primary", use_container_width=True)
@@ -401,17 +561,15 @@ with right:
                         if (row.cable_runs or 1) > 1
                         else f"{row.cable_mm2:g} mm²"
                     )
-                schedule.append(
-                    {
-                        "Circuit": row.circuit_id,
-                        "Load": row.description,
-                        "Phase": row.assigned_phase,
-                        "Ib": f"{row.design_current_a:.1f} A",
-                        "Breaker": f"{row.breaker_a:.0f} A" if row.breaker_a is not None else "—",
-                        "Cable": cable,
-                        "Scope": row.scope_status.replace("_", " "),
-                    }
-                )
+                schedule.append({
+                    "Circuit": row.circuit_id,
+                    "Load": row.description,
+                    "Phase": row.assigned_phase,
+                    "Ib": f"{row.design_current_a:.1f} A",
+                    "Breaker": f"{row.breaker_a:.0f} A" if row.breaker_a is not None else "—",
+                    "Cable": cable,
+                    "Scope": row.scope_status.replace("_", " "),
+                })
             st.dataframe(schedule, hide_index=True, use_container_width=True)
 
         blocking = tuple(c for c in result.circuits if c.verification.blocking_issues)
@@ -427,8 +585,8 @@ with right:
         with st.expander("Board planning assumptions"):
             st.write(f"• {incomer.basis}")
             st.write("• Automatic phase allocation is a planning heuristic, not an imbalance-compliance check.")
-            st.write("• Board-level diversity, final incomer protection verification, busbar rating, selectivity and fault-level checks are not implemented yet.")
+            st.write("• Field feeder aggregation, sub-board feeder demand, final incomer protection verification, busbar rating, selectivity and fault-level checks are not implemented yet.")
 
 st.caption(
-    "Hierarchy preview: the electrical tree is the source model. The schedule and single-line diagram are generated views of that same structure."
+    "Hierarchy preview: the electrical tree is the source model. Final circuits, fields and sub-boards are generated into the same live SLD."
 )
