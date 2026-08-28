@@ -72,7 +72,8 @@ def _visible_text(graph: BoardElectricalGraph, node: ElectricalNode) -> tuple[st
             load_bits.append("3P" if node.phase == "three" else "1P")
         return f"{cid} · {node.label}" if cid else node.label, " · ".join(load_bits), branch_info
     if node.kind == "field":
-        return node.label, f"{node.field_ref or 'Field'} · grouped circuits", branch_info
+        detail = node.display_detail or "grouped circuits"
+        return node.label, f"{node.field_ref or 'Field'} · {detail}", branch_info
     if node.kind == "sub_board":
         return node.label, f"{node.board_ref or 'Sub-board'} · downstream board", branch_info
     return node.label, node.kind.replace("_", " "), branch_info
