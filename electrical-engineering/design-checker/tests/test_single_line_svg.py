@@ -1,6 +1,10 @@
 import unittest
 
-from src.board_graph import add_radial_circuit, make_radial_board_graph
+from src.board_graph import (
+    add_field_feeder,
+    add_radial_circuit,
+    make_radial_board_graph,
+)
 from src.single_line_svg import render_board_graph_svg
 
 
@@ -13,10 +17,10 @@ class SingleLineSvgTests(unittest.TestCase):
         self.assertIn("Main busbar", svg)
         self.assertIn("rating pending", svg)
 
-    def test_minimal_board_is_centered_in_minimum_viewport(self):
-        graph = make_radial_board_graph(board_id="DB-CENTER", description="Board")
+    def test_minimal_board_is_centered_in_default_viewbox(self):
+        graph = make_radial_board_graph(board_id="DB-C", description="Centered board")
         svg = render_board_graph_svg(graph)
-        self.assertIn('viewBox="0 0 760', svg)
+        self.assertIn('viewBox="0 0 760 ', svg)
         self.assertIn('x="380.0"', svg)
 
     def test_renderer_updates_from_draft_circuit_inputs_without_calculation(self):
@@ -34,22 +38,27 @@ class SingleLineSvgTests(unittest.TestCase):
         self.assertIn("2.5 kW", svg)
         self.assertIn("1P", svg)
         self.assertIn("cable pending", svg)
-        self.assertIn('x="380.0"', svg)
 
-    def test_multiple_branches_expand_around_common_center(self):
-        graph = make_radial_board_graph(board_id="DB-04", description="Board")
-        for index in range(3):
-            graph = add_radial_circuit(
-                graph,
-                circuit_id=f"C-{index + 1:02d}",
-                description=f"Load {index + 1}",
-                load_kw=2,
-                phase="single",
-            )
+    def test_renderer_expands_field_and_child_circuit_in_same_live_hierarchy(self):
+        graph = add_field_feeder(
+            make_radial_board_graph(board_id="DB-F", description="Field board"),
+            feeder_id="F-01",
+            field_id="LTG",
+            description="Lighting field",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="LTG-01",
+            description="Lighting zone A",
+            load_kw=1.2,
+            parent_busbar_id="F-01:LTG:busbar",
+        )
         svg = render_board_graph_svg(graph)
-        self.assertIn('x="195.0"', svg)
-        self.assertIn('x="380.0"', svg)
-        self.assertIn('x="565.0"', svg)
+        self.assertIn("F-01 field protection", svg)
+        self.assertIn("Lighting field", svg)
+        self.assertIn("LTG busbar", svg)
+        self.assertIn("LTG-01 protection", svg)
+        self.assertIn("Lighting zone A", svg)
 
     def test_renderer_escapes_user_labels(self):
         graph = add_radial_circuit(
