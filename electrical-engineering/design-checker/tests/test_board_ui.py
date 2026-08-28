@@ -19,13 +19,14 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn("calculate_board_plan", self.text)
         self.assertNotIn("calculate_design_current(", self.text)
 
-    def test_board_ui_no_longer_uses_flat_data_editor_as_primary_model(self):
+    def test_board_ui_uses_structure_and_properties_side_by_side(self):
         self.assertNotIn("st.data_editor(", self.text)
-        self.assertIn('st.markdown("### Electrical hierarchy")', self.text)
-        self.assertIn('selected_node = st.radio(', self.text)
-        self.assertIn('"＋ Add branch"', self.text)
-        self.assertIn('"Delete selected branch"', self.text)
+        self.assertIn('workspace_left, workspace_right = st.columns(', self.text)
+        self.assertIn('st.markdown("### Board structure")', self.text)
         self.assertIn('st.markdown("### Properties")', self.text)
+        self.assertIn('selected_node = st.radio(', self.text)
+        self.assertIn('"＋ Add"', self.text)
+        self.assertIn('"Delete selected"', self.text)
 
     def test_new_board_starts_without_demo_branches(self):
         self.assertIn('def default_branches():', self.text)
@@ -40,19 +41,36 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('selected_parent_key is None', self.text)
         self.assertIn('parent_key', self.text)
 
-    def test_nested_branches_are_added_under_selected_busbar(self):
+    def test_user_hierarchy_does_not_expose_protection_or_cable_as_rows(self):
+        self.assertIn("Protection and cable remain backend nodes", self.text)
+        self.assertNotIn('f"branch:{uid}:device"', self.text)
+        self.assertNotIn('f"branch:{uid}:cable"', self.text)
+        self.assertIn('token = f"branch:{uid}"', self.text)
+
+    def test_field_and_sub_board_are_direct_add_targets(self):
+        self.assertIn('token_to_parent_key[token] = uid', self.text)
+        self.assertIn('append_tree(uid, depth + 1, own_group)', self.text)
         self.assertIn('busbar_by_parent_key = {"root": "busbar"}', self.text)
         self.assertIn('parent_busbar_id=parent_busbar_id', self.text)
-        self.assertIn('token_to_parent_key[f"branch:{uid}:busbar"] = uid', self.text)
-        self.assertIn('append_tree(uid, depth + 1)', self.text)
 
-    def test_board_ui_builds_live_sld_before_calculation(self):
+    def test_field_families_have_visual_markers(self):
+        self.assertIn('("🟩", "🟢")', self.text)
+        self.assertIn('("🟦", "🔵")', self.text)
+        self.assertIn('group_by_uid', self.text)
+        self.assertIn('inherited_group', self.text)
+
+    def test_board_ui_builds_fit_to_view_sld_below_workspace(self):
         self.assertIn("render_board_graph_svg", self.text)
-        self.assertIn("components.html(svg", self.text)
         self.assertIn('st.markdown("### Live single-line diagram")', self.text)
+        self.assertIn('diagram_html = f\'<div style="width:100%;height:650px;', self.text)
+        self.assertIn('components.html(diagram_html, height=670, scrolling=False)', self.text)
         self.assertIn("display_graph = draft_graph", self.text)
-        self.assertIn("if stored:", self.text)
         self.assertIn("display_graph = enrich_graph_with_plan", self.text)
+
+    def test_list_selection_is_reflected_in_diagram_highlight(self):
+        self.assertIn('def selected_graph_nodes(', self.text)
+        self.assertIn('highlighted = selected_graph_nodes(selected_node, selected_branch)', self.text)
+        self.assertIn('render_board_graph_svg(display_graph, highlighted)', self.text)
 
     def test_board_ui_uses_board_supply_voltage_contract(self):
         self.assertIn('"Line-line voltage (V)"', self.text)
