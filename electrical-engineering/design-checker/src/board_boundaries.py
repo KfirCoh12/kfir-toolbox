@@ -5,11 +5,11 @@ own final-load circuits into the existing BoardPlanRequest model. It deliberatel
 does not aggregate downstream board demand into feeder circuits: feeder sizing,
 diversity, and selectivity remain outside the implemented scope.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from .board_graph import BoardElectricalGraph, ElectricalNode, validate_board_graph
-from .board_planner import BoardPhasePreference, BoardPlanRequest
+from .board_planner import BoardPhasePreference, BoardPlanRequest, BoardPlanResult
 from .circuit_engine import CircuitDesignRequest
 
 BoundaryStatus = Literal["READY", "NO_FINAL_LOADS"]
@@ -176,3 +176,80 @@ def calculation_boundaries_from_graph(
         )
 
     return tuple(boundaries)
+
+
+def enrich_graph_with_board_plans(
+    graph: BoardElectricalGraph,
+    plans: tuple[BoardPlanResult, ...],
+) -> BoardElectricalGraph:
+    """Apply independently calculated board results back to their owned branches.
+
+    Only final-load circuit branches are enriched. Feeder protective devices/cables
+    and board incomers are intentionally untouched because no downstream demand or
+    feeder-protection model has been implemented yet.
+    """
+    boundaries = calculation_boundaries_from_graph(graph)
+    boundary_by_id = {boundary.board_id: boundary for boundary in boundaries}
+    plan_by_id: dict[str, BoardPlanResult] = {}
+
+    for plan in plans:
+        board_id = plan.request.board_id.strip()
+        if board_id in plan_by_id:
+            raise ValueError(f"duplicate board plan for {board_id}")
+        boundary = boundary_by_id.get(board_id)
+        if boundary is None:
+            raise ValueError(f"board plan {board_id} does not belong to this hierarchy")
+        if boundary.request is None:
+            raise ValueError(f"board {board_id} has no final loads to calculate")
+        expected = tuple(c.circuit_id for c in boundary.request.circuits)
+        actual = tuple(c.circuit_id for c in plan.request.circuits)
+        if actual != expected:
+            raise ValueError(
+                f"board plan {board_id} circuits do not match hierarchy boundary"
+            )
+        plan_by_id[board_id] = plan
+
+    circuit_owner: dict[str, str] = {}
+    for boundary in boundaries:
+        for load_node_id in boundary.final_load_node_ids:
+            load = graph.node_by_id[load_node_id]
+            if load.circuit_id is not None:
+                circuit_owner[load.circuit_id] = boundary.board_id
+
+    rows_by_board = {
+        board_id: {row.circuit_id: row for row in plan.schedule_rows}
+        for board_id, plan in plan_by_id.items()
+    }
+    enriched: list[ElectricalNode] = []
+    for node in graph.nodes:
+        cid = node.circuit_id
+        owner = circuit_owner.get(cid) if cid else None
+        row = rows_by_board.get(owner, {}).get(cid) if owner else None
+        if row is None:
+            enriched.append(node)
+            continue
+
+        common = dict(
+            assigned_phase=row.assigned_phase,
+            scope_status=row.scope_status,
+            issue_codes=row.blocking_issue_codes,
+        )
+        if node.kind == "protective_device":
+            enriched.append(replace(node, rating_a=row.breaker_a, **common))
+        elif node.kind == "cable":
+            enriched.append(
+                replace(
+                    node,
+                    cable_mm2=row.cable_mm2,
+                    cable_runs=row.cable_runs,
+                    **common,
+                )
+            )
+        elif node.kind == "load":
+            enriched.append(replace(node, **common))
+        else:
+            enriched.append(node)
+
+    updated = replace(graph, nodes=tuple(enriched))
+    validate_board_graph(updated)
+    return updated
