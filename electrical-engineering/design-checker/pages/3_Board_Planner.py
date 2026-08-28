@@ -51,41 +51,8 @@ st.markdown(
 
 
 def default_circuits():
-    return [
-        {
-            "uid": "seed-1",
-            "circuit_id": "C-01",
-            "description": "Lighting",
-            "load_kw": 2.0,
-            "phase": "single",
-            "power_factor": 0.90,
-            "demand_factor": 1.00,
-            "material": "copper",
-            "phase_preference": "Auto",
-        },
-        {
-            "uid": "seed-2",
-            "circuit_id": "C-02",
-            "description": "Sockets",
-            "load_kw": 3.0,
-            "phase": "single",
-            "power_factor": 0.90,
-            "demand_factor": 0.80,
-            "material": "copper",
-            "phase_preference": "Auto",
-        },
-        {
-            "uid": "seed-3",
-            "circuit_id": "C-03",
-            "description": "Three-phase load",
-            "load_kw": 12.0,
-            "phase": "three",
-            "power_factor": 0.90,
-            "demand_factor": 1.00,
-            "material": "copper",
-            "phase_preference": "Auto",
-        },
-    ]
+    """Start a new board without demo consumers."""
+    return []
 
 
 if "tree_board_circuits" not in st.session_state:
