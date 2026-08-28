@@ -2,8 +2,8 @@
 
 The graph is the shared design model. A schedule, calculation request, and SLD are
 views of the same parent/child electrical structure rather than separate sources of
-truth. V0 supports the ordinary radial board hierarchy while deliberately keeping
-node/parent relationships generic enough for sub-boards and richer topologies later.
+truth. The model supports radial final circuits plus downstream sub-board feeders,
+while keeping calculation logic delegated to the existing circuit/board engines.
 """
 from dataclasses import dataclass, replace
 from math import isfinite
@@ -26,6 +26,18 @@ CircuitMaterial = Literal["copper", "aluminium"]
 PhasePreference = Literal["Auto", "L1", "L2", "L3"]
 ScopeStatus = Literal["SUPPORTED_SCOPE", "PARTIAL_SCOPE", "NOT_VERIFIED"]
 
+# Conservative radial topology only. Richer arrangements (ATS, bus couplers, parallel
+# sources) should be introduced explicitly rather than silently accepted here.
+_ALLOWED_CHILD_KINDS: dict[ElectricalNodeKind, tuple[ElectricalNodeKind, ...]] = {
+    "source": ("incomer",),
+    "incomer": ("busbar",),
+    "busbar": ("protective_device",),
+    "protective_device": ("cable",),
+    "cable": ("load", "sub_board"),
+    "load": tuple(),
+    "sub_board": ("incomer",),
+}
+
 
 @dataclass(frozen=True)
 class ElectricalNode:
@@ -34,6 +46,7 @@ class ElectricalNode:
     label: str
     parent_id: str | None
     circuit_id: str | None = None
+    board_ref: str | None = None
 
     # Load/circuit design inputs. These live on the load node in the current model.
     load_kw: float | None = None
@@ -89,6 +102,25 @@ class BoardElectricalGraph:
             current = parent
         return tuple(ancestors)
 
+    def descendants_of(self, node_id: str) -> tuple[ElectricalNode, ...]:
+        if node_id not in self.node_by_id:
+            raise ValueError(f"unknown node {node_id}")
+        descendants: list[ElectricalNode] = []
+        pending = list(self.children_of(node_id))
+        while pending:
+            node = pending.pop(0)
+            descendants.append(node)
+            pending[0:0] = list(self.children_of(node.node_id))
+        return tuple(descendants)
+
+
+def _validate_parent_child(parent: ElectricalNode, child: ElectricalNode) -> None:
+    allowed = _ALLOWED_CHILD_KINDS[parent.kind]
+    if child.kind not in allowed:
+        raise ValueError(
+            f"invalid electrical hierarchy: {parent.kind} cannot directly feed {child.kind}"
+        )
+
 
 def validate_board_graph(graph: BoardElectricalGraph) -> None:
     if not graph.board_id.strip():
@@ -112,14 +144,35 @@ def validate_board_graph(graph: BoardElectricalGraph) -> None:
 
     by_id = graph.node_by_id
     for node in graph.nodes:
-        if node.parent_id is not None and node.parent_id not in by_id:
-            raise ValueError(f"node {node.node_id} references missing parent {node.parent_id}")
+        if node.parent_id is not None:
+            parent = by_id.get(node.parent_id)
+            if parent is None:
+                raise ValueError(f"node {node.node_id} references missing parent {node.parent_id}")
+            _validate_parent_child(parent, node)
         graph.ancestors_of(node.node_id)
 
     if len(graph.root_nodes) != 1:
         raise ValueError("board hierarchy must contain exactly one root node")
     if graph.root_nodes[0].kind != "source":
         raise ValueError("board hierarchy root must be a source")
+
+    # In the currently supported radial model each source/sub-board owns one incomer,
+    # and each incomer owns one busbar. Multiple incomers/bus sections require a later
+    # explicit topology extension rather than being interpreted accidentally.
+    for node in graph.nodes:
+        children = graph.children_of(node.node_id)
+        if node.kind in ("source", "sub_board"):
+            incomers = tuple(child for child in children if child.kind == "incomer")
+            if len(incomers) != 1:
+                raise ValueError(f"{node.kind} {node.node_id} must have exactly one incomer")
+        if node.kind == "incomer":
+            busbars = tuple(child for child in children if child.kind == "busbar")
+            if len(busbars) != 1:
+                raise ValueError(f"incomer {node.node_id} must have exactly one busbar")
+        if node.kind == "cable":
+            endpoints = tuple(child for child in children if child.kind in ("load", "sub_board"))
+            if len(endpoints) != 1:
+                raise ValueError(f"cable {node.node_id} must terminate at exactly one load or sub_board")
 
     load_circuit_ids = [
         node.circuit_id.strip()
@@ -128,6 +181,18 @@ def validate_board_graph(graph: BoardElectricalGraph) -> None:
     ]
     if len(load_circuit_ids) != len(set(load_circuit_ids)):
         raise ValueError("load circuit_id values must be unique within a board")
+
+    sub_board_refs = [
+        node.board_ref.strip()
+        for node in graph.nodes
+        if node.kind == "sub_board" and node.board_ref is not None
+    ]
+    if any(not ref for ref in sub_board_refs):
+        raise ValueError("sub_board board_ref is required")
+    if len(sub_board_refs) != len(set(sub_board_refs)):
+        raise ValueError("sub_board board_ref values must be unique within a hierarchy")
+    if graph.board_id.strip() in sub_board_refs:
+        raise ValueError("sub_board board_ref cannot equal the root board_id")
 
 
 def make_radial_board_graph(
@@ -144,9 +209,9 @@ def make_radial_board_graph(
         line_to_line_voltage_v=line_to_line_voltage_v,
         line_to_neutral_voltage_v=line_to_neutral_voltage_v,
         nodes=(
-            ElectricalNode("source", "source", "Supply", None),
-            ElectricalNode("incomer", "incomer", "Main incomer", "source"),
-            ElectricalNode("busbar", "busbar", "Main busbar", "incomer"),
+            ElectricalNode("source", "source", "Supply", None, board_ref=board_id.strip()),
+            ElectricalNode("incomer", "incomer", "Main incomer", "source", board_ref=board_id.strip()),
+            ElectricalNode("busbar", "busbar", "Main busbar", "incomer", board_ref=board_id.strip()),
         ),
     )
     validate_board_graph(graph)
@@ -202,18 +267,108 @@ def add_radial_circuit(
     return updated
 
 
-def remove_circuit(graph: BoardElectricalGraph, circuit_id: str) -> BoardElectricalGraph:
-    cid = circuit_id.strip()
-    updated = replace(
-        graph,
-        nodes=tuple(node for node in graph.nodes if node.circuit_id != cid),
+def add_sub_board_feeder(
+    graph: BoardElectricalGraph,
+    *,
+    feeder_id: str,
+    sub_board_id: str,
+    description: str,
+    parent_busbar_id: str = "busbar",
+) -> BoardElectricalGraph:
+    """Add a downstream radial board without inventing feeder sizing calculations.
+
+    Creates parent busbar -> protective device -> cable -> sub-board -> incomer ->
+    busbar. Feeder protection/cable values intentionally remain unset until a future
+    board-demand engine can calculate them from downstream loads using explicit rules.
+    """
+    fid = feeder_id.strip()
+    child_board_id = sub_board_id.strip()
+    child_description = description.strip()
+    if not fid:
+        raise ValueError("feeder_id is required")
+    if not child_board_id:
+        raise ValueError("sub_board_id is required")
+    if not child_description:
+        raise ValueError("sub-board description is required")
+    if parent_busbar_id not in graph.node_by_id:
+        raise ValueError(f"unknown parent busbar {parent_busbar_id}")
+    if graph.node_by_id[parent_busbar_id].kind != "busbar":
+        raise ValueError("sub-board feeder parent must be a busbar")
+    if any(node.circuit_id == fid for node in graph.nodes if node.circuit_id is not None):
+        raise ValueError(f"circuit_id {fid} already exists")
+    if child_board_id == graph.board_id.strip() or any(
+        node.kind == "sub_board" and node.board_ref == child_board_id for node in graph.nodes
+    ):
+        raise ValueError(f"board_id {child_board_id} already exists in hierarchy")
+
+    prefix = f"{fid}:{child_board_id}"
+    additions = (
+        ElectricalNode(
+            f"{fid}:device",
+            "protective_device",
+            f"{fid} feeder protection",
+            parent_busbar_id,
+            circuit_id=fid,
+        ),
+        ElectricalNode(
+            f"{fid}:cable",
+            "cable",
+            f"{fid} feeder cable",
+            f"{fid}:device",
+            circuit_id=fid,
+        ),
+        ElectricalNode(
+            f"{prefix}:board",
+            "sub_board",
+            child_description,
+            f"{fid}:cable",
+            circuit_id=fid,
+            board_ref=child_board_id,
+        ),
+        ElectricalNode(
+            f"{prefix}:incomer",
+            "incomer",
+            f"{child_board_id} incomer",
+            f"{prefix}:board",
+            board_ref=child_board_id,
+        ),
+        ElectricalNode(
+            f"{prefix}:busbar",
+            "busbar",
+            f"{child_board_id} busbar",
+            f"{prefix}:incomer",
+            board_ref=child_board_id,
+        ),
     )
+    updated = replace(graph, nodes=graph.nodes + additions)
+    validate_board_graph(updated)
+    return updated
+
+
+def remove_circuit(graph: BoardElectricalGraph, circuit_id: str) -> BoardElectricalGraph:
+    """Remove a final circuit or a complete downstream feeder/sub-board branch."""
+    cid = circuit_id.strip()
+    roots = tuple(
+        node for node in graph.nodes
+        if node.circuit_id == cid and node.kind == "protective_device"
+    )
+    if not roots:
+        return graph
+    remove_ids: set[str] = set()
+    for root in roots:
+        remove_ids.add(root.node_id)
+        remove_ids.update(node.node_id for node in graph.descendants_of(root.node_id))
+    updated = replace(graph, nodes=tuple(node for node in graph.nodes if node.node_id not in remove_ids))
     validate_board_graph(updated)
     return updated
 
 
 def board_plan_request_from_graph(graph: BoardElectricalGraph) -> BoardPlanRequest:
-    """Translate complete load nodes into the existing shared board calculation engine."""
+    """Translate complete final-load nodes into the existing shared board engine.
+
+    Downstream board feeders are deliberately excluded: deriving their design current
+    requires board-level downstream demand/diversity rules that are not implemented.
+    """
     validate_board_graph(graph)
     circuits: list[CircuitDesignRequest] = []
     preferences: list[BoardPhasePreference] = []
@@ -241,11 +396,7 @@ def board_plan_request_from_graph(graph: BoardElectricalGraph) -> BoardPlanReque
             description=node.label.strip(),
             load_type="kw",
             load_value=node.load_kw,
-            voltage_v=(
-                graph.line_to_line_voltage_v
-                if node.phase == "three"
-                else graph.line_to_neutral_voltage_v
-            ),
+            voltage_v=(graph.line_to_line_voltage_v if node.phase == "three" else graph.line_to_neutral_voltage_v),
             phase=node.phase,
             power_factor=node.power_factor,
             demand_factor=node.demand_factor,
@@ -266,11 +417,8 @@ def board_plan_request_from_graph(graph: BoardElectricalGraph) -> BoardPlanReque
     )
 
 
-def enrich_graph_with_plan(
-    graph: BoardElectricalGraph,
-    plan: BoardPlanResult,
-) -> BoardElectricalGraph:
-    """Attach calculated branch values to their existing electrical nodes."""
+def enrich_graph_with_plan(graph: BoardElectricalGraph, plan: BoardPlanResult) -> BoardElectricalGraph:
+    """Attach calculated final-circuit values to their existing electrical nodes."""
     if plan.request.board_id.strip() != graph.board_id.strip():
         raise ValueError("board plan does not belong to this graph")
     rows = {row.circuit_id: row for row in plan.schedule_rows}
@@ -289,12 +437,7 @@ def enrich_graph_with_plan(
         if node.kind == "protective_device":
             enriched.append(replace(node, rating_a=row.breaker_a, **common))
         elif node.kind == "cable":
-            enriched.append(replace(
-                node,
-                cable_mm2=row.cable_mm2,
-                cable_runs=row.cable_runs,
-                **common,
-            ))
+            enriched.append(replace(node, cable_mm2=row.cable_mm2, cable_runs=row.cable_runs, **common))
         elif node.kind == "load":
             enriched.append(replace(node, **common))
         else:
