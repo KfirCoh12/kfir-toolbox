@@ -55,6 +55,7 @@ class ElectricalNode:
     demand_factor: float | None = None
     material: CircuitMaterial | None = None
     phase_preference: PhasePreference = "Auto"
+    display_detail: str | None = None
     rating_a: float | None = None
     cable_mm2: float | None = None
     cable_runs: int | None = None
@@ -254,12 +255,13 @@ def add_radial_circuit(
     *,
     circuit_id: str,
     description: str,
-    load_kw: float = 1.0,
+    load_kw: float | None = 1.0,
     phase: CircuitPhase = "single",
     power_factor: float = 0.9,
     demand_factor: float = 1.0,
     material: CircuitMaterial = "copper",
     phase_preference: PhasePreference = "Auto",
+    display_detail: str | None = None,
     parent_busbar_id: str = "busbar",
 ) -> BoardElectricalGraph:
     cid = circuit_id.strip()
@@ -300,6 +302,7 @@ def add_radial_circuit(
             demand_factor=demand_factor,
             material=material,
             phase_preference=phase_preference,
+            display_detail=display_detail,
         ),
     )
     updated = replace(graph, nodes=graph.nodes + additions)
