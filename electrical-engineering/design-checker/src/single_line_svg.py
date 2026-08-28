@@ -62,7 +62,9 @@ def _visible_text(graph: BoardElectricalGraph, node: ElectricalNode) -> tuple[st
 
     if node.kind == "load":
         load_bits = []
-        if node.load_kw is not None:
+        if node.display_detail:
+            load_bits.append(node.display_detail)
+        elif node.load_kw is not None:
             load_bits.append(f"{node.load_kw:g} kW")
         if node.assigned_phase:
             load_bits.append(node.assigned_phase)
@@ -113,7 +115,6 @@ def render_board_graph_svg(
     """
     validate_board_graph(graph)
     visible_nodes = tuple(node for node in graph.nodes if node.kind in _VISIBLE_KINDS)
-    visible_by_id = {node.node_id: node for node in visible_nodes}
     root = graph.root_nodes[0]
 
     parent_of = {node.node_id: _visible_parent_id(graph, node) for node in visible_nodes}
