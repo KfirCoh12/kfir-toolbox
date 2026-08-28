@@ -99,6 +99,21 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertNotIn('st.button("Calculate board"', self.text)
         self.assertNotIn('tree_board_plan', self.text)
 
+    def test_field_properties_show_bottom_up_feeder_rollup(self):
+        self.assertIn("calculate_field_rollups", self.text)
+        self.assertIn("enrich_graph_with_field_rollups", self.text)
+        self.assertIn('"Feeder conductor material"', self.text)
+        self.assertIn("Live field roll-up", self.text)
+        self.assertIn('f1.metric("Max phase"', self.text)
+        self.assertIn('"Feeder breaker"', self.text)
+        self.assertIn('f3.metric("Feeder cable"', self.text)
+        self.assertIn("No additional field diversity is applied", self.text)
+
+    def test_field_rollup_does_not_replace_root_child_circuit_accounting(self):
+        self.assertIn('field_rollups = calculate_field_rollups(draft_graph, live_plan, field_materials())', self.text)
+        self.assertIn('display_graph = enrich_graph_with_field_rollups(display_graph, field_rollups)', self.text)
+        self.assertNotIn('circuits.append(rollup.feeder_design.request)', self.text)
+
     def test_sub_board_children_are_not_flattened_into_root_live_plan(self):
         self.assertIn('def is_below_sub_board(', self.text)
         self.assertIn('if branch.get("kind") != "final" or is_below_sub_board(branch):', self.text)
@@ -119,8 +134,9 @@ class BoardPlannerUITests(unittest.TestCase):
     def test_board_ui_keeps_hierarchy_limitations_explicit(self):
         self.assertIn('with st.expander("Current calculation scope / checks")', self.text)
         self.assertIn('with st.expander("Branches needing input")', self.text)
-        self.assertIn("Field feeder aggregation", self.text)
-        self.assertIn("sub-board feeder demand", self.text)
+        self.assertIn("Field feeders now roll up their calculated child phase currents", self.text)
+        self.assertIn("neutral loading and harmonic effects", self.text)
+        self.assertIn("Sub-board feeder demand", self.text)
         self.assertIn("final protection verification", self.text)
 
     def test_phase_preference_is_only_exposed_for_single_phase_nodes(self):
