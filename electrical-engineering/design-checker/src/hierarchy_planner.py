@@ -48,6 +48,12 @@ class FeederInstallationDeclaration:
     These values do not expand the supported engineering dataset. They only allow the
     existing circuit engine to be reused when the declared conditions fit its narrow
     automatic Method E / three-loaded-conductor scope.
+
+    Voltage-drop calculation is optional. If ``length_m`` is supplied, Annex G
+    resistivity/reactance defaults must currently be explicitly enabled because the
+    feeder declaration does not yet carry user-supplied conductor impedance data.
+    ``power_factor`` may still be supplied explicitly; otherwise Annex G's PF default
+    is also used when defaults are enabled.
     """
 
     feeder_circuit_id: str
@@ -58,6 +64,7 @@ class FeederInstallationDeclaration:
     parallel_runs: int = 1
     equal_current_sharing_confirmed: bool | None = None
     length_m: float | None = None
+    power_factor: float | None = None
     permitted_voltage_drop_percent: float | None = None
     voltage_drop_limit_source: str | None = None
     allow_annex_g_defaults: bool = False
@@ -183,6 +190,34 @@ def _validate_feeder_installation(declaration: FeederInstallationDeclaration) ->
         raise ValueError("feeder installation grouped_circuits must be greater than 0")
     if declaration.parallel_runs <= 0:
         raise ValueError("feeder installation parallel_runs must be greater than 0")
+    if declaration.length_m is not None:
+        if not isfinite(declaration.length_m) or declaration.length_m <= 0:
+            raise ValueError("feeder installation length_m must be finite and greater than 0")
+        if not declaration.allow_annex_g_defaults:
+            raise ValueError(
+                "feeder voltage-drop calculation currently requires explicit "
+                "allow_annex_g_defaults=True because feeder conductor impedance "
+                "inputs are not yet represented"
+            )
+    elif declaration.permitted_voltage_drop_percent is not None:
+        raise ValueError("feeder voltage-drop limit requires length_m")
+    elif declaration.voltage_drop_limit_source is not None:
+        raise ValueError("feeder voltage-drop limit source requires length_m")
+    if declaration.power_factor is not None:
+        if not isfinite(declaration.power_factor) or not 0 < declaration.power_factor <= 1:
+            raise ValueError("feeder installation power_factor must be greater than 0 and at most 1")
+        if declaration.length_m is None:
+            raise ValueError("feeder installation power_factor is only used when length_m is declared")
+    if declaration.permitted_voltage_drop_percent is not None:
+        if (
+            not isfinite(declaration.permitted_voltage_drop_percent)
+            or declaration.permitted_voltage_drop_percent <= 0
+        ):
+            raise ValueError(
+                "feeder permitted_voltage_drop_percent must be finite and greater than 0"
+            )
+        if not (declaration.voltage_drop_limit_source or "").strip():
+            raise ValueError("feeder voltage-drop limit source is required when a limit is declared")
     if not declaration.basis_note.strip():
         raise ValueError("feeder installation basis_note is required")
 
@@ -283,7 +318,7 @@ def _feeder_rollup(
         load_value=required,
         voltage_v=graph.line_to_line_voltage_v,
         phase="three",
-        power_factor=None,
+        power_factor=installation.power_factor,
         demand_factor=1.0,
         material=installation.material,
         ambient_temperature_c=installation.ambient_temperature_c,
