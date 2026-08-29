@@ -66,13 +66,19 @@ def _strict_dataclass(cls, raw: Any, label: str, *, tuple_fields: tuple[str, ...
         raise ValueError(f"{label} is missing required fields or has invalid structure: {exc}") from exc
 
 
+def _node_to_dict(node: ElectricalNode) -> dict[str, Any]:
+    data = asdict(node)
+    data["issue_codes"] = list(node.issue_codes)
+    return data
+
+
 def _graph_to_dict(graph: BoardElectricalGraph) -> dict[str, Any]:
     return {
         "board_id": graph.board_id,
         "description": graph.description,
         "line_to_line_voltage_v": graph.line_to_line_voltage_v,
         "line_to_neutral_voltage_v": graph.line_to_neutral_voltage_v,
-        "nodes": [asdict(node) for node in graph.nodes],
+        "nodes": [_node_to_dict(node) for node in graph.nodes],
     }
 
 
@@ -90,8 +96,7 @@ def _graph_from_dict(raw: Any) -> BoardElectricalGraph:
         raise ValueError(
             f"project.graph contains unknown fields: {', '.join(sorted(unknown))}"
         )
-    required = allowed
-    missing = required - set(data)
+    missing = allowed - set(data)
     if missing:
         raise ValueError(
             f"project.graph is missing required fields: {', '.join(sorted(missing))}"
