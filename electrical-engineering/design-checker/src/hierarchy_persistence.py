@@ -18,6 +18,7 @@ from .circuit_engine import CircuitDesignRequest
 from .hierarchy_planner import (
     FeederInstallationDeclaration,
     FeederPhaseMappingDeclaration,
+    calculate_board_hierarchy,
 )
 
 _SCHEMA_VERSION = 1
@@ -121,9 +122,27 @@ def _graph_from_dict(raw: Any) -> BoardElectricalGraph:
     return graph
 
 
+def validate_hierarchy_project(project: HierarchyEngineeringProject) -> None:
+    """Reject source inputs that cannot form one coherent hierarchy calculation.
+
+    Persistence is a source-of-truth boundary, so validation includes declaration
+    semantics and graph cross-references rather than only JSON/dataclass shape. The
+    hierarchy calculation is intentionally discarded; its role here is to exercise
+    the same authoritative backend validation path used by normal calculations.
+    """
+    if not isinstance(project, HierarchyEngineeringProject):
+        raise ValueError("hierarchy project must be a HierarchyEngineeringProject")
+    calculate_board_hierarchy(
+        project.graph,
+        project.circuit_request_overrides,
+        project.feeder_installations,
+        project.feeder_phase_mappings,
+    )
+
+
 def project_to_document(project: HierarchyEngineeringProject) -> dict[str, Any]:
     """Convert source inputs to the stable versioned JSON document contract."""
-    validate_board_graph(project.graph)
+    validate_hierarchy_project(project)
     return {
         "schema_version": _SCHEMA_VERSION,
         "project": {
@@ -136,7 +155,7 @@ def project_to_document(project: HierarchyEngineeringProject) -> dict[str, Any]:
 
 
 def project_from_document(document: Any) -> HierarchyEngineeringProject:
-    """Decode a versioned document, rejecting silent schema drift."""
+    """Decode a versioned document, rejecting silent schema or semantic drift."""
     root = _require_object(document, "saved hierarchy")
     unknown_root = set(root) - {"schema_version", "project"}
     if unknown_root:
@@ -159,7 +178,7 @@ def project_from_document(document: Any) -> HierarchyEngineeringProject:
     if missing:
         raise ValueError(f"project is missing required fields: {', '.join(sorted(missing))}")
 
-    return HierarchyEngineeringProject(
+    project = HierarchyEngineeringProject(
         graph=_graph_from_dict(payload["graph"]),
         circuit_request_overrides=tuple(
             _strict_dataclass(CircuitDesignRequest, item, f"project.circuit_request_overrides[{i}]")
@@ -180,6 +199,8 @@ def project_from_document(document: Any) -> HierarchyEngineeringProject:
             )
         ),
     )
+    validate_hierarchy_project(project)
+    return project
 
 
 def save_hierarchy_project(
