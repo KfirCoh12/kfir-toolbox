@@ -35,6 +35,18 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('return []', self.text)
         self.assertNotIn('"uid": "seed-1"', self.text)
 
+    def test_board_identity_requires_explicit_edit_and_rejects_blank_commit(self):
+        self.assertIn('identity_editing = bool(st.session_state.get("tree_identity_editing", False))', self.text)
+        self.assertIn('st.button("Edit identity"', self.text)
+        self.assertIn('st.button("Save identity"', self.text)
+        self.assertIn('st.button("Cancel"', self.text)
+        self.assertIn('disabled=True, key="tree_board_id_locked"', self.text)
+        self.assertIn('disabled=True, key="tree_board_description_locked"', self.text)
+        self.assertIn('if not clean_board_id or not clean_description:', self.text)
+        self.assertIn('Existing board identity was kept unchanged', self.text)
+        self.assertIn('"board_id": board_id', self.text)
+        self.assertIn('"description": description', self.text)
+
     def test_branch_type_selector_exposes_final_field_and_sub_board(self):
         self.assertIn('"Final circuit"', self.text)
         self.assertIn('"Field / circuit group"', self.text)
