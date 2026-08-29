@@ -14,10 +14,10 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn("add_radial_circuit", self.text)
         self.assertIn("add_field_feeder", self.text)
         self.assertIn("add_sub_board_feeder", self.text)
-        self.assertIn("enrich_graph_with_plan", self.text)
+        self.assertIn("enrich_graph_with_hierarchy_plan", self.text)
+        self.assertIn("calculate_board_hierarchy", self.text)
         self.assertIn("FinalBranchDesignRequest", self.text)
         self.assertIn("calculate_final_branch", self.text)
-        self.assertIn("calculate_board_plan", self.text)
         self.assertNotIn("calculate_design_current(", self.text)
 
     def test_board_ui_uses_structure_and_properties_side_by_side(self):
@@ -78,7 +78,7 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('diagram_html = f\'<div style="width:100%;height:650px;', self.text)
         self.assertIn('components.html(diagram_html, height=670, scrolling=False)', self.text)
         self.assertIn("display_graph = draft_graph", self.text)
-        self.assertIn("display_graph = enrich_graph_with_plan", self.text)
+        self.assertIn("display_graph = enrich_graph_with_hierarchy_plan", self.text)
 
     def test_list_selection_is_reflected_in_diagram_highlight(self):
         self.assertIn('def selected_graph_nodes(', self.text)
@@ -101,13 +101,14 @@ class BoardPlannerUITests(unittest.TestCase):
 
     def test_manual_mode_uses_current_basis_without_inventing_kw(self):
         self.assertIn('graph_load_kw = None', self.text)
-        self.assertIn('display_detail = f"Manual · {preview.connection_rating_a:g} A outlet"', self.text)
+        self.assertIn('f"Manual · {preview.connection_rating_a:g} A outlet"', self.text)
+        self.assertIn('"Manual · outlet pending"', self.text)
         self.assertIn('Manual outlet mode fixes the rated outlet current as the branch requirement', self.text)
 
-    def test_live_board_calculation_replaces_calculate_button(self):
-        self.assertIn('def build_live_root_request(', self.text)
-        self.assertIn('circuits.append(result.circuit.request)', self.text)
-        self.assertIn('live_plan = calculate_board_plan(root_request)', self.text)
+    def test_live_board_calculation_uses_recursive_hierarchy_without_calculate_button(self):
+        self.assertIn('hierarchy_plan = calculate_board_hierarchy(', self.text)
+        self.assertIn('circuit_request_overrides=exact_requests', self.text)
+        self.assertIn('live_plan = hierarchy_plan.root.plan if hierarchy_plan is not None else None', self.text)
         self.assertNotIn('st.button("Calculate board"', self.text)
         self.assertNotIn('tree_board_plan', self.text)
 
@@ -126,9 +127,11 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('display_graph = enrich_graph_with_field_rollups(display_graph, field_rollups)', self.text)
         self.assertNotIn('circuits.append(rollup.feeder_design.request)', self.text)
 
-    def test_sub_board_children_are_not_flattened_into_root_live_plan(self):
-        self.assertIn('def is_below_sub_board(', self.text)
-        self.assertIn('if branch.get("kind") != "final" or is_below_sub_board(branch):', self.text)
+    def test_sub_board_demand_is_recursive_and_not_flattened_into_root_schedule(self):
+        self.assertIn('calculate_board_hierarchy(', self.text)
+        self.assertIn('result.circuit.request', self.text)
+        self.assertIn('Sub-board phase demand now propagates recursively', self.text)
+        self.assertIn('without flattening child circuits', self.text)
 
     def test_schedule_is_generated_secondary_view(self):
         self.assertIn('with st.expander("Generated circuit schedule")', self.text)
@@ -146,9 +149,9 @@ class BoardPlannerUITests(unittest.TestCase):
     def test_board_ui_keeps_hierarchy_limitations_explicit(self):
         self.assertIn('with st.expander("Current calculation scope / checks")', self.text)
         self.assertIn('with st.expander("Branches needing input")', self.text)
-        self.assertIn("Field feeders now roll up their calculated child phase currents", self.text)
+        self.assertIn("Field feeders roll up their calculated child phase currents", self.text)
         self.assertIn("neutral loading and harmonic effects", self.text)
-        self.assertIn("Sub-board feeder demand", self.text)
+        self.assertIn("Sub-board feeder breaker ratings remain provisional", self.text)
         self.assertIn("final protection verification", self.text)
 
     def test_phase_preference_is_only_exposed_for_single_phase_nodes(self):
