@@ -2,7 +2,7 @@ import unittest
 
 from src.board_graph import add_radial_circuit, add_sub_board_feeder, make_radial_board_graph
 from src.hierarchy_enrichment import enrich_graph_with_hierarchy_plan
-from src.hierarchy_planner import calculate_board_hierarchy
+from src.hierarchy_planner import FeederInstallationDeclaration, calculate_board_hierarchy
 
 
 class HierarchyEnrichmentTests(unittest.TestCase):
@@ -58,12 +58,68 @@ class HierarchyEnrichmentTests(unittest.TestCase):
         self.assertEqual(by_id["DBF-01:device"].rating_a, rollup.breaker_candidate_a)
         self.assertIn("SUB_BOARD_FEEDER_PROVISIONAL", by_id["DBF-01:device"].issue_codes)
 
-    def test_sub_board_feeder_cable_remains_unsized(self):
+    def test_sub_board_feeder_cable_remains_unsized_without_installation_declaration(self):
         graph = self._graph()
-        enriched = enrich_graph_with_hierarchy_plan(graph, calculate_board_hierarchy(graph))
+        hierarchy = calculate_board_hierarchy(graph)
+        self.assertEqual(hierarchy.feeder_rollups[0].cable_status, "NOT_DECLARED")
+        enriched = enrich_graph_with_hierarchy_plan(graph, hierarchy)
         feeder_cable = enriched.node_by_id["DBF-01:cable"]
         self.assertIsNone(feeder_cable.cable_mm2)
         self.assertIsNone(feeder_cable.cable_runs)
+        self.assertNotIn("SUB_BOARD_FEEDER_CABLE_PROVISIONAL", feeder_cable.issue_codes)
+
+    def test_declared_supported_feeder_cable_candidate_is_written_to_graph(self):
+        graph = self._graph()
+        hierarchy = calculate_board_hierarchy(
+            graph,
+            feeder_installations=(FeederInstallationDeclaration(
+                feeder_circuit_id="DBF-01",
+                material="copper",
+                basis_note="Declared Method E feeder installation for test",
+            ),),
+        )
+        rollup = hierarchy.feeder_rollups[0]
+        self.assertEqual(rollup.cable_status, "CANDIDATE")
+        self.assertIsNotNone(rollup.cable_candidate_mm2)
+        self.assertIsNotNone(rollup.cable_runs)
+
+        enriched = enrich_graph_with_hierarchy_plan(graph, hierarchy)
+        feeder_cable = enriched.node_by_id["DBF-01:cable"]
+        self.assertEqual(feeder_cable.cable_mm2, rollup.cable_candidate_mm2)
+        self.assertEqual(feeder_cable.cable_runs, rollup.cable_runs)
+        self.assertIn("SUB_BOARD_FEEDER_CABLE_PROVISIONAL", feeder_cable.issue_codes)
+        self.assertIn(feeder_cable.scope_status, ("PARTIAL_SCOPE", "NOT_VERIFIED"))
+
+    def test_not_verified_declared_feeder_cable_does_not_invent_graph_size(self):
+        graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Child board",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="C-CHILD",
+            description="Single-phase child load",
+            load_kw=3.0,
+            phase="single",
+            parent_busbar_id="DBF-01:DB-02:busbar",
+        )
+        hierarchy = calculate_board_hierarchy(
+            graph,
+            feeder_installations=(FeederInstallationDeclaration(
+                feeder_circuit_id="DBF-01",
+                material="copper",
+                basis_note="Declared feeder with single-phase descendants",
+            ),),
+        )
+        self.assertEqual(hierarchy.feeder_rollups[0].cable_status, "NOT_VERIFIED")
+        enriched = enrich_graph_with_hierarchy_plan(graph, hierarchy)
+        feeder_cable = enriched.node_by_id["DBF-01:cable"]
+        self.assertIsNone(feeder_cable.cable_mm2)
+        self.assertIsNone(feeder_cable.cable_runs)
+        self.assertNotIn("SUB_BOARD_FEEDER_CABLE_PROVISIONAL", feeder_cable.issue_codes)
 
     def test_parent_with_only_child_demand_still_gets_incomer_candidate(self):
         graph = make_radial_board_graph(board_id="DB-01", description="Main board")
