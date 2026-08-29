@@ -3,6 +3,7 @@ import unittest
 from src.board_graph import (
     add_field_feeder,
     add_radial_circuit,
+    add_sub_board_feeder,
     make_radial_board_graph,
 )
 from src.single_line_svg import render_board_graph_svg
@@ -78,6 +79,30 @@ class SingleLineSvgTests(unittest.TestCase):
         self.assertIn("LTG-01 · Lighting zone A", svg)
         self.assertIn("group-green", svg)
         self.assertNotIn(">F-01 field protection<", svg)
+
+    def test_renderer_collapses_downstream_incomer_into_sub_board_box(self):
+        graph = add_sub_board_feeder(
+            make_radial_board_graph(board_id="MDB", description="Main board"),
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Downstream board",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="C-07",
+            description="Sub-board load",
+            load_kw=1.0,
+            phase="single",
+            parent_busbar_id="DBF-01:DB-02:busbar",
+        )
+        svg = render_board_graph_svg(graph)
+        self.assertIn("Downstream board", svg)
+        self.assertIn("DB-02 · incomer rating pending", svg)
+        self.assertIn("DBF-01 · protection pending · cable pending", svg)
+        self.assertIn("DB-02 busbar", svg)
+        self.assertIn("C-07 · Sub-board load", svg)
+        self.assertNotIn(">DB-02 incomer<", svg)
+        self.assertIn("Main incomer", svg)
 
     def test_renderer_can_highlight_selected_visible_object(self):
         graph = add_radial_circuit(
