@@ -8,8 +8,15 @@ balanced three-phase load.
 Callers may also supply exact CircuitDesignRequest overrides for graph loads whose
 real basis is fixed current or kVA. The hierarchy therefore preserves that basis
 without converting it to an invented kW value.
+
+Sub-board feeder cable sizing remains opt-in. A caller must explicitly declare the
+feeder installation conditions, and automatic cable selection is only attempted when
+the complete downstream hierarchy contains no single-phase final loads. This keeps
+neutral/harmonic effects outside the automatic claim rather than silently treating a
+mixed hierarchy as a three-loaded-conductor feeder.
 """
 from dataclasses import dataclass, replace
+from math import isfinite
 from typing import Literal
 
 from .board_boundaries import BoardCalculationBoundary, calculation_boundaries_from_graph
@@ -21,10 +28,40 @@ from .board_planner import (
     calculate_board_plan,
 )
 from .catalogs import BREAKER_RATINGS_A
-from .circuit_engine import CircuitDesignRequest
+from .circuit_engine import CircuitDesignRequest, calculate_circuit_design
 
 HierarchyBoardStatus = Literal["CALCULATED", "NO_DEMAND"]
 FeederRollupStatus = Literal["PROVISIONAL", "NO_DEMAND", "NO_CANDIDATE"]
+FeederCableStatus = Literal[
+    "NOT_DECLARED",
+    "CANDIDATE",
+    "NOT_VERIFIED",
+    "NO_CANDIDATE",
+    "NOT_APPLICABLE",
+]
+
+
+@dataclass(frozen=True)
+class FeederInstallationDeclaration:
+    """Explicit installation inputs for one sub-board feeder.
+
+    These values do not expand the supported engineering dataset. They only allow the
+    existing circuit engine to be reused when the declared conditions fit its narrow
+    automatic Method E / three-loaded-conductor scope.
+    """
+
+    feeder_circuit_id: str
+    material: Literal["copper", "aluminium"] = "copper"
+    ambient_temperature_c: float = 30.0
+    grouped_circuits: int = 1
+    grouping_arrangement: str | None = None
+    parallel_runs: int = 1
+    equal_current_sharing_confirmed: bool | None = None
+    length_m: float | None = None
+    permitted_voltage_drop_percent: float | None = None
+    voltage_drop_limit_source: str | None = None
+    allow_annex_g_defaults: bool = False
+    basis_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +72,7 @@ class HierarchyBoardResult:
     status: HierarchyBoardStatus
     plan: BoardPlanResult | None
     child_board_ids: tuple[str, ...]
+    contains_single_phase_loads: bool
 
 
 @dataclass(frozen=True)
@@ -48,6 +86,11 @@ class SubBoardFeederRollup:
     l3_current_a: float
     required_current_a: float
     breaker_candidate_a: float | None
+    cable_status: FeederCableStatus
+    cable_candidate_mm2: float | None
+    cable_runs: int | None
+    feeder_scope_status: str | None
+    installation_declared: bool
     basis: str
     limitations: tuple[str, ...]
 
@@ -129,7 +172,26 @@ def _contribution_from_child(
     )
 
 
-def _feeder_rollup(board: HierarchyBoardResult) -> SubBoardFeederRollup:
+def _validate_feeder_installation(declaration: FeederInstallationDeclaration) -> None:
+    if not declaration.feeder_circuit_id.strip():
+        raise ValueError("feeder installation feeder_circuit_id is required")
+    if declaration.material not in ("copper", "aluminium"):
+        raise ValueError("feeder installation material must be copper or aluminium")
+    if not isfinite(declaration.ambient_temperature_c):
+        raise ValueError("feeder installation ambient temperature must be finite")
+    if declaration.grouped_circuits <= 0:
+        raise ValueError("feeder installation grouped_circuits must be greater than 0")
+    if declaration.parallel_runs <= 0:
+        raise ValueError("feeder installation parallel_runs must be greater than 0")
+    if not declaration.basis_note.strip():
+        raise ValueError("feeder installation basis_note is required")
+
+
+def _feeder_rollup(
+    graph: BoardElectricalGraph,
+    board: HierarchyBoardResult,
+    installation: FeederInstallationDeclaration | None,
+) -> SubBoardFeederRollup:
     if board.parent_board_id is None or board.feeder_circuit_id is None:
         raise ValueError("root board does not have an upstream feeder rollup")
     if board.plan is None:
@@ -143,6 +205,11 @@ def _feeder_rollup(board: HierarchyBoardResult) -> SubBoardFeederRollup:
             l3_current_a=0.0,
             required_current_a=0.0,
             breaker_candidate_a=None,
+            cable_status="NOT_APPLICABLE",
+            cable_candidate_mm2=None,
+            cable_runs=None,
+            feeder_scope_status=None,
+            installation_declared=installation is not None,
             basis="Downstream board has no calculated local or child-board demand.",
             limitations=("No feeder demand is synthesized for an empty downstream board.",),
         )
@@ -150,6 +217,100 @@ def _feeder_rollup(board: HierarchyBoardResult) -> SubBoardFeederRollup:
     balance = board.plan.phase_balance
     required = balance.max_phase_current_a
     rating = next((float(value) for value in BREAKER_RATINGS_A if value >= required), None)
+    base_limitations = [
+        "Breaker rating is a conventional planning candidate only; protection and selectivity are not verified.",
+        "L1/L2/L3 are assumed phase-aligned between parent and child boards; transformer phase shift is not modeled.",
+    ]
+
+    if installation is None:
+        base_limitations.insert(
+            1,
+            "Feeder cable is not sized because feeder material and installation conditions were not declared.",
+        )
+        return SubBoardFeederRollup(
+            board_id=board.board_id,
+            parent_board_id=board.parent_board_id,
+            feeder_circuit_id=board.feeder_circuit_id,
+            status="PROVISIONAL" if rating is not None else "NO_CANDIDATE",
+            l1_current_a=balance.l1_current_a,
+            l2_current_a=balance.l2_current_a,
+            l3_current_a=balance.l3_current_a,
+            required_current_a=required,
+            breaker_candidate_a=rating,
+            cable_status="NOT_DECLARED",
+            cable_candidate_mm2=None,
+            cable_runs=None,
+            feeder_scope_status=None,
+            installation_declared=False,
+            basis=(
+                "Highest calculated downstream-board phase current, with no additional "
+                "hierarchy-level diversity."
+            ),
+            limitations=tuple(base_limitations),
+        )
+
+    if board.contains_single_phase_loads:
+        base_limitations.insert(
+            1,
+            "Automatic feeder cable selection is not verified because the downstream hierarchy contains single-phase loads; neutral loading and harmonic effects are not modeled by the three-loaded-conductor dataset.",
+        )
+        return SubBoardFeederRollup(
+            board_id=board.board_id,
+            parent_board_id=board.parent_board_id,
+            feeder_circuit_id=board.feeder_circuit_id,
+            status="PROVISIONAL" if rating is not None else "NO_CANDIDATE",
+            l1_current_a=balance.l1_current_a,
+            l2_current_a=balance.l2_current_a,
+            l3_current_a=balance.l3_current_a,
+            required_current_a=required,
+            breaker_candidate_a=rating,
+            cable_status="NOT_VERIFIED",
+            cable_candidate_mm2=None,
+            cable_runs=None,
+            feeder_scope_status="NOT_VERIFIED",
+            installation_declared=True,
+            basis=(
+                "Highest calculated downstream-board phase current, with no additional "
+                "hierarchy-level diversity."
+            ),
+            limitations=tuple(base_limitations),
+        )
+
+    design = calculate_circuit_design(CircuitDesignRequest(
+        circuit_id=board.feeder_circuit_id,
+        description=f"{board.board_id} feeder",
+        load_type="a",
+        load_value=required,
+        voltage_v=graph.line_to_line_voltage_v,
+        phase="three",
+        power_factor=None,
+        demand_factor=1.0,
+        material=installation.material,
+        ambient_temperature_c=installation.ambient_temperature_c,
+        grouped_circuits=installation.grouped_circuits,
+        grouping_arrangement=installation.grouping_arrangement,
+        parallel_runs=installation.parallel_runs,
+        equal_current_sharing_confirmed=installation.equal_current_sharing_confirmed,
+        length_m=installation.length_m,
+        permitted_voltage_drop_percent=installation.permitted_voltage_drop_percent,
+        voltage_drop_limit_source=installation.voltage_drop_limit_source,
+        allow_annex_g_defaults=installation.allow_annex_g_defaults,
+    ))
+    if design.breaker_a != rating:
+        raise ValueError("feeder breaker candidate disagrees with shared circuit engine")
+
+    if design.cable_mm2 is not None:
+        cable_status: FeederCableStatus = "CANDIDATE"
+    elif design.selection.status == "NO SUPPORTED SOLUTION":
+        cable_status = "NO_CANDIDATE"
+    else:
+        cable_status = "NOT_VERIFIED"
+
+    base_limitations.insert(
+        1,
+        "Feeder cable candidate reuses the existing automatic three-phase circuit engine under the explicitly declared installation conditions.",
+    )
+    base_limitations.extend(design.selection.limitations)
     return SubBoardFeederRollup(
         board_id=board.board_id,
         parent_board_id=board.parent_board_id,
@@ -160,27 +321,34 @@ def _feeder_rollup(board: HierarchyBoardResult) -> SubBoardFeederRollup:
         l3_current_a=balance.l3_current_a,
         required_current_a=required,
         breaker_candidate_a=rating,
+        cable_status=cable_status,
+        cable_candidate_mm2=design.cable_mm2,
+        cable_runs=design.cable_runs,
+        feeder_scope_status=design.verification.scope_status,
+        installation_declared=True,
         basis=(
             "Highest calculated downstream-board phase current, with no additional "
-            "hierarchy-level diversity."
+            "hierarchy-level diversity. "
+            f"Installation basis: {installation.basis_note.strip()}"
         ),
-        limitations=(
-            "Breaker rating is a conventional planning candidate only; protection and selectivity are not verified.",
-            "Feeder cable is not sized because feeder material and installation conditions are not declared by the hierarchy model.",
-            "L1/L2/L3 are assumed phase-aligned between parent and child boards; transformer phase shift is not modeled.",
-        ),
+        limitations=tuple(dict.fromkeys(base_limitations)),
     )
 
 
 def calculate_board_hierarchy(
     graph: BoardElectricalGraph,
     circuit_request_overrides: tuple[CircuitDesignRequest, ...] = tuple(),
+    feeder_installations: tuple[FeederInstallationDeclaration, ...] = tuple(),
 ) -> BoardHierarchyPlanResult:
     """Calculate every board bottom-up and propagate child phase vectors upstream.
 
     Exact circuit overrides are passed into boundary construction before any board is
     solved. A fixed-A or kVA load therefore remains fixed-A or kVA at every hierarchy
     depth and in generated schedule rows.
+
+    Feeder installation declarations are optional. Without one, the hierarchy still
+    returns demand and a conventional breaker candidate but intentionally leaves the
+    feeder cable unresolved.
     """
     validate_board_graph(graph)
     boundaries = calculation_boundaries_from_graph(graph, circuit_request_overrides)
@@ -204,6 +372,21 @@ def calculate_board_hierarchy(
     if len(roots) != 1 or roots[0] != graph.board_id.strip():
         raise ValueError("hierarchy must resolve exactly one root board matching graph.board_id")
 
+    valid_feeder_ids = {
+        boundary.feeder_circuit_id
+        for boundary in boundaries
+        if boundary.feeder_circuit_id is not None
+    }
+    installation_by_feeder: dict[str, FeederInstallationDeclaration] = {}
+    for declaration in feeder_installations:
+        _validate_feeder_installation(declaration)
+        feeder_id = declaration.feeder_circuit_id.strip()
+        if feeder_id in installation_by_feeder:
+            raise ValueError(f"duplicate feeder installation declaration for {feeder_id}")
+        if feeder_id not in valid_feeder_ids:
+            raise ValueError(f"feeder installation references unknown sub-board feeder {feeder_id}")
+        installation_by_feeder[feeder_id] = declaration
+
     solved: dict[str, HierarchyBoardResult] = {}
     visiting: set[str] = set()
 
@@ -217,8 +400,10 @@ def calculate_board_hierarchy(
         boundary = boundary_by_id[board_id]
         child_ids = tuple(children_by_id[board_id])
         contributions: list[BoardPhaseContribution] = []
+        child_results: list[HierarchyBoardResult] = []
         for child_id in child_ids:
             child = solve(child_id)
+            child_results.append(child)
             if child.plan is None:
                 continue
             if child.feeder_circuit_id is None:
@@ -229,6 +414,12 @@ def calculate_board_hierarchy(
 
         request = _base_request(graph, boundary, tuple(contributions))
         plan = calculate_board_plan(request) if request is not None else None
+        local_single_phase = bool(
+            plan is not None and any(circuit.request.phase == "single" for circuit in plan.circuits)
+        )
+        contains_single_phase = local_single_phase or any(
+            child.contains_single_phase_loads for child in child_results
+        )
         result = HierarchyBoardResult(
             board_id=board_id,
             parent_board_id=parent_by_id[board_id],
@@ -236,6 +427,7 @@ def calculate_board_hierarchy(
             status="CALCULATED" if plan is not None else "NO_DEMAND",
             plan=plan,
             child_board_ids=child_ids,
+            contains_single_phase_loads=contains_single_phase,
         )
         solved[board_id] = result
         visiting.remove(board_id)
@@ -244,7 +436,11 @@ def calculate_board_hierarchy(
     solve(roots[0])
     ordered_boards = tuple(solved[boundary.board_id] for boundary in boundaries)
     feeder_rollups = tuple(
-        _feeder_rollup(board)
+        _feeder_rollup(
+            graph,
+            board,
+            installation_by_feeder.get(board.feeder_circuit_id or ""),
+        )
         for board in ordered_boards
         if board.parent_board_id is not None
     )
