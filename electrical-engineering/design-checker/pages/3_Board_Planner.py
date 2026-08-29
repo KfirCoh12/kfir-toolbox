@@ -95,6 +95,11 @@ def restore_working_board():
 
 restore_working_board()
 
+if not str(st.session_state.get("tree_board_id", "")).strip():
+    st.session_state["tree_board_id"] = "DB-01"
+if not str(st.session_state.get("tree_board_description", "")).strip():
+    st.session_state["tree_board_description"] = "Distribution board"
+
 if st.session_state.get("_tree_persistence_error"):
     st.warning(st.session_state["_tree_persistence_error"])
 
@@ -322,11 +327,61 @@ def cable_label(result):
     return f"{runs} × {result.cable_mm2:g} mm²" if runs > 1 else f"{result.cable_mm2:g} mm²"
 
 
-header_left, header_right = st.columns([1, 1])
-with header_left:
-    board_id = st.text_input("Board ID", key="tree_board_id")
-with header_right:
-    description = st.text_input("Board description", key="tree_board_description")
+board_id = str(st.session_state["tree_board_id"]).strip()
+description = str(st.session_state["tree_board_description"]).strip()
+identity_editing = bool(st.session_state.get("tree_identity_editing", False))
+
+if identity_editing:
+    header_left, header_right = st.columns([1, 1])
+    with header_left:
+        draft_board_id = st.text_input(
+            "Board ID",
+            value=str(st.session_state.get("tree_board_id_draft", board_id)),
+            key="tree_board_id_draft",
+        )
+    with header_right:
+        draft_description = st.text_input(
+            "Board description",
+            value=str(st.session_state.get("tree_board_description_draft", description)),
+            key="tree_board_description_draft",
+        )
+
+    save_identity_col, cancel_identity_col, _ = st.columns([0.16, 0.16, 0.68])
+    with save_identity_col:
+        save_identity = st.button("Save identity", use_container_width=True)
+    with cancel_identity_col:
+        cancel_identity = st.button("Cancel", use_container_width=True)
+
+    if save_identity:
+        clean_board_id = draft_board_id.strip()
+        clean_description = draft_description.strip()
+        if not clean_board_id or not clean_description:
+            st.error("Board ID and description are required. Existing board identity was kept unchanged.")
+        else:
+            st.session_state["tree_board_id"] = clean_board_id
+            st.session_state["tree_board_description"] = clean_description
+            st.session_state["tree_identity_editing"] = False
+            st.session_state.pop("tree_board_id_draft", None)
+            st.session_state.pop("tree_board_description_draft", None)
+            st.rerun()
+    elif cancel_identity:
+        st.session_state["tree_identity_editing"] = False
+        st.session_state.pop("tree_board_id_draft", None)
+        st.session_state.pop("tree_board_description_draft", None)
+        st.rerun()
+else:
+    identity_left, identity_middle, identity_right = st.columns([0.42, 0.42, 0.16])
+    with identity_left:
+        st.text_input("Board ID", value=board_id, disabled=True, key="tree_board_id_locked")
+    with identity_middle:
+        st.text_input("Board description", value=description, disabled=True, key="tree_board_description_locked")
+    with identity_right:
+        st.write("")
+        if st.button("Edit identity", use_container_width=True):
+            st.session_state["tree_board_id_draft"] = board_id
+            st.session_state["tree_board_description_draft"] = description
+            st.session_state["tree_identity_editing"] = True
+            st.rerun()
 
 with st.expander("Board supply"):
     v1, v2, _ = st.columns([1, 1, 2])
