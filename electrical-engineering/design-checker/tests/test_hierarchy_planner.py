@@ -1,7 +1,7 @@
 import unittest
 
 from src.board_graph import add_radial_circuit, add_sub_board_feeder, make_radial_board_graph
-from src.hierarchy_planner import calculate_board_hierarchy
+from src.hierarchy_planner import FeederInstallationDeclaration, calculate_board_hierarchy
 
 
 class HierarchyPlannerTests(unittest.TestCase):
@@ -113,7 +113,7 @@ class HierarchyPlannerTests(unittest.TestCase):
             plans["DB-03"].phase_balance.max_phase_current_a,
         )
 
-    def test_feeder_rollup_exposes_breaker_candidate_but_not_cable(self):
+    def test_feeder_rollup_exposes_breaker_candidate_but_not_cable_without_declaration(self):
         graph = make_radial_board_graph(board_id="DB-01", description="Main board")
         graph = add_sub_board_feeder(
             graph,
@@ -137,7 +137,135 @@ class HierarchyPlannerTests(unittest.TestCase):
         self.assertEqual(rollup.feeder_circuit_id, "DBF-01")
         self.assertEqual(rollup.status, "PROVISIONAL")
         self.assertIsNotNone(rollup.breaker_candidate_a)
-        self.assertIn("Feeder cable is not sized", rollup.limitations[1])
+        self.assertEqual(rollup.cable_status, "NOT_DECLARED")
+        self.assertIsNone(rollup.cable_candidate_mm2)
+        self.assertFalse(rollup.installation_declared)
+
+    def test_declared_three_phase_feeder_installation_can_reuse_supported_cable_engine(self):
+        graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Three-phase board",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="C-01",
+            description="Motor load",
+            load_kw=18.0,
+            phase="three",
+            parent_busbar_id="DBF-01:DB-02:busbar",
+        )
+
+        result = calculate_board_hierarchy(
+            graph,
+            feeder_installations=(FeederInstallationDeclaration(
+                feeder_circuit_id="DBF-01",
+                material="copper",
+                basis_note="Project feeder installation: Method E in air, 30 C, one circuit.",
+            ),),
+        )
+        rollup = result.feeder_rollups[0]
+        self.assertTrue(rollup.installation_declared)
+        self.assertEqual(rollup.cable_status, "CANDIDATE")
+        self.assertIsNotNone(rollup.cable_candidate_mm2)
+        self.assertEqual(rollup.cable_runs, 1)
+        self.assertEqual(rollup.feeder_scope_status, "SUPPORTED_SCOPE")
+        self.assertIn("Installation basis", rollup.basis)
+
+    def test_single_phase_descendant_blocks_automatic_feeder_cable_candidate(self):
+        graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Mixed board",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="C-01",
+            description="Single-phase child",
+            load_kw=3.0,
+            phase="single",
+            parent_busbar_id="DBF-01:DB-02:busbar",
+        )
+
+        result = calculate_board_hierarchy(
+            graph,
+            feeder_installations=(FeederInstallationDeclaration(
+                feeder_circuit_id="DBF-01",
+                basis_note="Declared feeder installation.",
+            ),),
+        )
+        child = next(board for board in result.boards if board.board_id == "DB-02")
+        rollup = result.feeder_rollups[0]
+        self.assertTrue(child.contains_single_phase_loads)
+        self.assertEqual(rollup.cable_status, "NOT_VERIFIED")
+        self.assertIsNone(rollup.cable_candidate_mm2)
+        self.assertIn("single-phase loads", " ".join(rollup.limitations))
+
+    def test_nested_single_phase_load_blocks_each_upstream_feeder_cable_candidate(self):
+        graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Middle board",
+        )
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="DBF-02",
+            sub_board_id="DB-03",
+            description="Leaf board",
+            parent_busbar_id="DBF-01:DB-02:busbar",
+        )
+        graph = add_radial_circuit(
+            graph,
+            circuit_id="C-LEAF",
+            description="Leaf single phase",
+            load_kw=2.0,
+            phase="single",
+            parent_busbar_id="DBF-02:DB-03:busbar",
+        )
+
+        result = calculate_board_hierarchy(
+            graph,
+            feeder_installations=(
+                FeederInstallationDeclaration("DBF-01", basis_note="Parent feeder conditions."),
+                FeederInstallationDeclaration("DBF-02", basis_note="Leaf feeder conditions."),
+            ),
+        )
+        by_id = {rollup.feeder_circuit_id: rollup for rollup in result.feeder_rollups}
+        self.assertEqual(by_id["DBF-01"].cable_status, "NOT_VERIFIED")
+        self.assertEqual(by_id["DBF-02"].cable_status, "NOT_VERIFIED")
+
+    def test_unknown_duplicate_or_unproven_feeder_installations_are_rejected(self):
+        graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        graph = add_sub_board_feeder(
+            graph,
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Sub-board",
+        )
+        with self.assertRaisesRegex(ValueError, "basis_note"):
+            calculate_board_hierarchy(
+                graph,
+                feeder_installations=(FeederInstallationDeclaration("DBF-01"),),
+            )
+        with self.assertRaisesRegex(ValueError, "unknown sub-board feeder"):
+            calculate_board_hierarchy(
+                graph,
+                feeder_installations=(FeederInstallationDeclaration("DBF-99", basis_note="Known."),),
+            )
+        with self.assertRaisesRegex(ValueError, "duplicate feeder installation"):
+            calculate_board_hierarchy(
+                graph,
+                feeder_installations=(
+                    FeederInstallationDeclaration("DBF-01", basis_note="Known A."),
+                    FeederInstallationDeclaration("DBF-01", basis_note="Known B."),
+                ),
+            )
 
     def test_empty_downstream_board_does_not_create_fake_parent_demand(self):
         graph = make_radial_board_graph(board_id="DB-01", description="Main board")
@@ -152,6 +280,7 @@ class HierarchyPlannerTests(unittest.TestCase):
         child = next(board for board in result.boards if board.board_id == "DB-02")
         self.assertEqual(child.status, "NO_DEMAND")
         self.assertEqual(result.feeder_rollups[0].status, "NO_DEMAND")
+        self.assertEqual(result.feeder_rollups[0].cable_status, "NOT_APPLICABLE")
 
 
 if __name__ == "__main__":
