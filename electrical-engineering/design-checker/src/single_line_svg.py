@@ -20,6 +20,18 @@ def _status_class(*nodes: ElectricalNode) -> str:
     return "normal"
 
 
+def _is_visible_node(graph: BoardElectricalGraph, node: ElectricalNode) -> bool:
+    """Keep the root incomer visible while collapsing downstream board incomers."""
+    if node.kind not in _VISIBLE_KINDS:
+        return False
+    if node.kind != "incomer":
+        return True
+    if node.parent_id is None:
+        return True
+    parent = graph.node_by_id.get(node.parent_id)
+    return parent is None or parent.kind != "sub_board"
+
+
 def _branch_components(graph: BoardElectricalGraph, endpoint: ElectricalNode) -> tuple[ElectricalNode | None, ElectricalNode | None]:
     """Return the hidden cable and protection nodes feeding a visible endpoint."""
     by_id = graph.node_by_id
@@ -30,6 +42,16 @@ def _branch_components(graph: BoardElectricalGraph, endpoint: ElectricalNode) ->
     if device is None or device.kind != "protective_device":
         device = None
     return cable, device
+
+
+def _sub_board_incomer(graph: BoardElectricalGraph, node: ElectricalNode) -> ElectricalNode | None:
+    """Return the engineering incomer node owned by one visible sub-board."""
+    if node.kind != "sub_board":
+        return None
+    for candidate in graph.nodes:
+        if candidate.kind == "incomer" and candidate.parent_id == node.node_id:
+            return candidate
+    return None
 
 
 def _protection_text(device: ElectricalNode | None) -> str:
@@ -75,7 +97,13 @@ def _visible_text(graph: BoardElectricalGraph, node: ElectricalNode) -> tuple[st
         detail = node.display_detail or "grouped circuits"
         return node.label, f"{node.field_ref or 'Field'} · {detail}", branch_info
     if node.kind == "sub_board":
-        return node.label, f"{node.board_ref or 'Sub-board'} · downstream board", branch_info
+        incomer = _sub_board_incomer(graph, node)
+        incomer_text = (
+            f"{incomer.rating_a:g} A incomer"
+            if incomer is not None and incomer.rating_a is not None
+            else "incomer rating pending"
+        )
+        return node.label, f"{node.board_ref or 'Sub-board'} · {incomer_text}", branch_info
     return node.label, node.kind.replace("_", " "), branch_info
 
 
@@ -84,7 +112,7 @@ def _visible_parent_id(graph: BoardElectricalGraph, node: ElectricalNode) -> str
     parent_id = node.parent_id
     while parent_id is not None:
         parent = by_id[parent_id]
-        if parent.kind in _VISIBLE_KINDS:
+        if _is_visible_node(graph, parent):
             return parent.node_id
         parent_id = parent.parent_id
     return None
@@ -110,12 +138,12 @@ def render_board_graph_svg(
     """Render a compact, fit-to-view SLD from the electrical hierarchy.
 
     Protection and cable nodes stay in the engineering graph but are presented as
-    information inside their final-load/field/sub-board box. The visual hierarchy
-    therefore follows what the user is designing rather than exposing every backend
-    component as a separate selectable box.
+    information inside their final-load/field/sub-board box. A downstream board's
+    incomer also stays in the engineering graph but is folded into the sub-board box;
+    the root-board incomer remains a separate visible object.
     """
     validate_board_graph(graph)
-    visible_nodes = tuple(node for node in graph.nodes if node.kind in _VISIBLE_KINDS)
+    visible_nodes = tuple(node for node in graph.nodes if _is_visible_node(graph, node))
     root = graph.root_nodes[0]
 
     parent_of = {node.node_id: _visible_parent_id(graph, node) for node in visible_nodes}
@@ -197,7 +225,12 @@ def render_board_graph_svg(
             continue
 
         cable, device = _branch_components(graph, node) if node.kind in ("load", "field", "sub_board") else (None, None)
-        status = _status_class(node, *(part for part in (cable, device) if part is not None))
+        extra_status_nodes = []
+        if node.kind == "sub_board":
+            incomer = _sub_board_incomer(graph, node)
+            if incomer is not None:
+                extra_status_nodes.append(incomer)
+        status = _status_class(node, *(part for part in (cable, device, *extra_status_nodes) if part is not None))
         selected_class = " selected" if node.node_id in selected else ""
         classes = " ".join(part for part in ("node", status, group_class, selected_class.strip()) if part)
         box_height = 78 if detail2 else 62
