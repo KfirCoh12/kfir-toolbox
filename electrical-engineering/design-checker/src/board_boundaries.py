@@ -1,9 +1,11 @@
 """Per-board calculation boundaries over the shared electrical hierarchy.
 
 This module identifies each board in a hierarchy and translates only that board's
-own final-load circuits into the existing BoardPlanRequest model. It deliberately
-does not aggregate downstream board demand into feeder circuits: feeder sizing,
-diversity, and selectivity remain outside the implemented scope.
+own final-load circuits into the existing BoardPlanRequest model. Callers may supply
+exact CircuitDesignRequest overrides for graph loads whose engineering basis is not
+representable by the legacy kW-only graph fields (for example fixed-current/manual
+or kVA requirements). Downstream board demand is still handled separately by the
+hierarchy planner; no feeder diversity or selectivity is invented here.
 """
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -63,12 +65,76 @@ def _board_metadata(
     raise ValueError(f"board {board_id} has no matching sub_board anchor")
 
 
+def _validate_override(
+    graph: BoardElectricalGraph,
+    node: ElectricalNode,
+    request: CircuitDesignRequest,
+) -> CircuitDesignRequest:
+    cid = (node.circuit_id or "").strip()
+    if request.circuit_id.strip() != cid:
+        raise ValueError(f"circuit override for {cid} must keep the graph circuit_id")
+    if request.phase not in ("single", "three"):
+        raise ValueError(f"{cid}: override phase must be single or three")
+    expected_voltage = (
+        graph.line_to_line_voltage_v
+        if request.phase == "three"
+        else graph.line_to_neutral_voltage_v
+    )
+    if request.voltage_v != expected_voltage:
+        voltage_kind = "line-to-line" if request.phase == "three" else "line-to-neutral"
+        raise ValueError(
+            f"{cid}: override voltage {request.voltage_v:g} V does not match board "
+            f"{voltage_kind} voltage {expected_voltage:g} V"
+        )
+    if request.phase == "three" and node.phase_preference != "Auto":
+        raise ValueError(f"{cid}: phase preference only applies to single-phase circuits")
+    return request
+
+
+def _legacy_kw_request(
+    graph: BoardElectricalGraph,
+    node: ElectricalNode,
+) -> CircuitDesignRequest:
+    cid = (node.circuit_id or "").strip()
+    if node.load_kw is None or node.load_kw <= 0:
+        raise ValueError(
+            f"{cid}: graph load has no positive kW value; provide an exact circuit request override"
+        )
+    if node.phase not in ("single", "three"):
+        raise ValueError(f"{cid}: phase must be single or three")
+    if node.power_factor is None or not 0 < node.power_factor <= 1:
+        raise ValueError(f"{cid}: power_factor must be greater than 0 and at most 1")
+    if node.demand_factor is None or not 0 < node.demand_factor <= 1:
+        raise ValueError(f"{cid}: demand_factor must be greater than 0 and at most 1")
+    if node.material not in ("copper", "aluminium"):
+        raise ValueError(f"{cid}: material must be copper or aluminium")
+    if node.phase == "three" and node.phase_preference != "Auto":
+        raise ValueError(f"{cid}: phase preference only applies to single-phase circuits")
+
+    return CircuitDesignRequest(
+        circuit_id=cid,
+        description=node.label.strip(),
+        load_type="kw",
+        load_value=node.load_kw,
+        voltage_v=(
+            graph.line_to_line_voltage_v
+            if node.phase == "three"
+            else graph.line_to_neutral_voltage_v
+        ),
+        phase=node.phase,
+        power_factor=node.power_factor,
+        demand_factor=node.demand_factor,
+        material=node.material,
+    )
+
+
 def _request_for_loads(
     graph: BoardElectricalGraph,
     *,
     board_id: str,
     description: str,
     loads: tuple[ElectricalNode, ...],
+    overrides_by_id: dict[str, CircuitDesignRequest],
 ) -> BoardPlanRequest:
     circuits: list[CircuitDesignRequest] = []
     preferences: list[BoardPhasePreference] = []
@@ -77,39 +143,14 @@ def _request_for_loads(
         cid = (node.circuit_id or "").strip()
         if not cid:
             raise ValueError(f"load node {node.node_id} requires circuit_id")
-        if node.load_kw is None or node.load_kw <= 0:
-            raise ValueError(f"{cid}: load_kw must be greater than 0")
-        if node.phase not in ("single", "three"):
-            raise ValueError(f"{cid}: phase must be single or three")
-        if node.power_factor is None or not 0 < node.power_factor <= 1:
-            raise ValueError(f"{cid}: power_factor must be greater than 0 and at most 1")
-        if node.demand_factor is None or not 0 < node.demand_factor <= 1:
-            raise ValueError(f"{cid}: demand_factor must be greater than 0 and at most 1")
-        if node.material not in ("copper", "aluminium"):
-            raise ValueError(f"{cid}: material must be copper or aluminium")
-        if node.phase == "three" and node.phase_preference != "Auto":
-            raise ValueError(
-                f"{cid}: phase preference only applies to single-phase circuits"
-            )
+        request = overrides_by_id.get(cid)
+        if request is None:
+            request = _legacy_kw_request(graph, node)
+        else:
+            request = _validate_override(graph, node, request)
+        circuits.append(request)
 
-        circuits.append(
-            CircuitDesignRequest(
-                circuit_id=cid,
-                description=node.label.strip(),
-                load_type="kw",
-                load_value=node.load_kw,
-                voltage_v=(
-                    graph.line_to_line_voltage_v
-                    if node.phase == "three"
-                    else graph.line_to_neutral_voltage_v
-                ),
-                phase=node.phase,
-                power_factor=node.power_factor,
-                demand_factor=node.demand_factor,
-                material=node.material,
-            )
-        )
-        if node.phase == "single" and node.phase_preference in ("L1", "L2", "L3"):
+        if request.phase == "single" and node.phase_preference in ("L1", "L2", "L3"):
             preferences.append(BoardPhasePreference(cid, node.phase_preference))
 
     return BoardPlanRequest(
@@ -124,17 +165,33 @@ def _request_for_loads(
 
 def calculation_boundaries_from_graph(
     graph: BoardElectricalGraph,
+    circuit_request_overrides: tuple[CircuitDesignRequest, ...] = tuple(),
 ) -> tuple[BoardCalculationBoundary, ...]:
     """Return one explicit calculation boundary for every board in the hierarchy.
 
-    A boundary is READY only when the board directly owns at least one final load.
-    Downstream boards are never flattened into an upstream request, and sub-board
-    feeders are not synthesized as loads. Empty boards remain visible as
-    NO_FINAL_LOADS boundaries so callers can distinguish "nothing to calculate" from
-    a missing board.
+    Exact request overrides are keyed by circuit_id and replace only the load basis for
+    that final circuit. This lets manual/fixed-A and kVA circuits retain their real
+    engineering basis without converting them into fictitious kW values.
     """
     validate_board_graph(graph)
+    overrides_by_id: dict[str, CircuitDesignRequest] = {}
+    for request in circuit_request_overrides:
+        cid = request.circuit_id.strip()
+        if not cid:
+            raise ValueError("circuit request override circuit_id is required")
+        if cid in overrides_by_id:
+            raise ValueError(f"duplicate circuit request override for {cid}")
+        overrides_by_id[cid] = request
+
     loads = tuple(node for node in graph.nodes if node.kind == "load")
+    graph_load_ids = {(node.circuit_id or "").strip() for node in loads}
+    unknown_overrides = tuple(cid for cid in overrides_by_id if cid not in graph_load_ids)
+    if unknown_overrides:
+        raise ValueError(
+            "circuit request override references unknown graph load: "
+            + ", ".join(unknown_overrides)
+        )
+
     owner_by_load = {
         node.node_id: _owning_busbar(graph, node).node_id for node in loads
     }
@@ -158,6 +215,7 @@ def calculation_boundaries_from_graph(
                 board_id=board_id,
                 description=description,
                 loads=owned_loads,
+                overrides_by_id=overrides_by_id,
             )
             if owned_loads
             else None
@@ -181,14 +239,10 @@ def calculation_boundaries_from_graph(
 def enrich_graph_with_board_plans(
     graph: BoardElectricalGraph,
     plans: tuple[BoardPlanResult, ...],
+    circuit_request_overrides: tuple[CircuitDesignRequest, ...] = tuple(),
 ) -> BoardElectricalGraph:
-    """Apply independently calculated board results back to their owned branches.
-
-    Only final-load circuit branches are enriched. Feeder protective devices/cables
-    and board incomers are intentionally untouched because no downstream demand or
-    feeder-protection model has been implemented yet.
-    """
-    boundaries = calculation_boundaries_from_graph(graph)
+    """Apply independently calculated board results back to their owned branches."""
+    boundaries = calculation_boundaries_from_graph(graph, circuit_request_overrides)
     boundary_by_id = {boundary.board_id: boundary for boundary in boundaries}
     plan_by_id: dict[str, BoardPlanResult] = {}
 
