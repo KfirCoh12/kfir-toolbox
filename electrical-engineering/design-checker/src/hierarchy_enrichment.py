@@ -5,11 +5,13 @@ actually calculated:
 
 - final-circuit schedule results -> existing protection/cable/load nodes,
 - each calculated board's provisional incomer candidate -> that board incomer,
-- downstream-board feeder breaker candidate -> existing feeder protective device.
+- downstream-board feeder breaker candidate -> existing feeder protective device,
+- explicitly calculated downstream-board feeder cable candidate -> existing feeder cable.
 
-Sub-board feeder cables remain untouched because the hierarchy planner intentionally
-has no feeder material/installation contract. Protection/selectivity/fault-level
-verification is not implied by this enrichment.
+A sub-board feeder cable is populated only when the hierarchy planner returned a
+candidate from an explicit feeder-installation declaration. Undeclared or unsupported
+feeder cables remain unsized. Protection/selectivity/fault-level verification is not
+implied by this enrichment.
 """
 from dataclasses import replace
 
@@ -17,6 +19,7 @@ from .board_graph import BoardElectricalGraph, ElectricalNode, validate_board_gr
 from .hierarchy_planner import BoardHierarchyPlanResult
 
 _PROVISIONAL_FEEDER_CODE = "SUB_BOARD_FEEDER_PROVISIONAL"
+_PROVISIONAL_FEEDER_CABLE_CODE = "SUB_BOARD_FEEDER_CABLE_PROVISIONAL"
 _PROVISIONAL_INCOMER_CODE = "BOARD_INCOMER_PROVISIONAL"
 
 
@@ -90,6 +93,11 @@ def _validate_result_against_graph(
         for node in graph.nodes
         if node.kind == "protective_device" and node.circuit_id
     }
+    graph_feeder_cables = {
+        node.circuit_id.strip(): node
+        for node in graph.nodes
+        if node.kind == "cable" and node.circuit_id
+    }
     for rollup in result.feeder_rollups:
         feeder_id = rollup.feeder_circuit_id.strip()
         if not feeder_id:
@@ -99,6 +107,9 @@ def _validate_result_against_graph(
         device = graph_feeder_devices.get(feeder_id)
         if device is None:
             raise ValueError(f"sub-board feeder rollup {feeder_id} has no graph protective device")
+        cable = graph_feeder_cables.get(feeder_id)
+        if cable is None or cable.parent_id != device.node_id:
+            raise ValueError(f"sub-board feeder rollup {feeder_id} has no matching graph cable")
         downstream = tuple(
             node
             for node in graph.nodes
@@ -109,6 +120,15 @@ def _validate_result_against_graph(
         if len(downstream) != 1:
             raise ValueError(
                 f"sub-board feeder rollup {feeder_id} does not match exactly one downstream board"
+            )
+        if rollup.cable_status == "CANDIDATE":
+            if rollup.cable_candidate_mm2 is None or rollup.cable_runs is None:
+                raise ValueError(
+                    f"sub-board feeder rollup {feeder_id} cable candidate is incomplete"
+                )
+        elif rollup.cable_candidate_mm2 is not None or rollup.cable_runs is not None:
+            raise ValueError(
+                f"sub-board feeder rollup {feeder_id} exposes cable values without CANDIDATE status"
             )
         rollup_by_feeder[feeder_id] = rollup
 
@@ -183,8 +203,9 @@ def enrich_graph_with_hierarchy_plan(
             )
             continue
 
-        # Upstream protection for a downstream board. Cable is deliberately untouched.
         rollup = rollup_by_feeder.get(cid) if cid else None
+
+        # Upstream protection for a downstream board.
         if node.kind == "protective_device" and rollup is not None:
             enriched.append(
                 replace(
@@ -195,6 +216,26 @@ def enrich_graph_with_hierarchy_plan(
                         tuple(dict.fromkeys(node.issue_codes + (_PROVISIONAL_FEEDER_CODE,)))
                         if rollup.status != "NO_DEMAND"
                         else node.issue_codes
+                    ),
+                )
+            )
+            continue
+
+        # Feeder cable values exist only after an explicit supported installation declaration.
+        if node.kind == "cable" and rollup is not None and rollup.cable_status == "CANDIDATE":
+            graph_scope = (
+                "NOT_VERIFIED"
+                if rollup.feeder_scope_status == "NOT_VERIFIED"
+                else "PARTIAL_SCOPE"
+            )
+            enriched.append(
+                replace(
+                    node,
+                    cable_mm2=rollup.cable_candidate_mm2,
+                    cable_runs=rollup.cable_runs,
+                    scope_status=graph_scope,
+                    issue_codes=tuple(
+                        dict.fromkeys(node.issue_codes + (_PROVISIONAL_FEEDER_CABLE_CODE,))
                     ),
                 )
             )
