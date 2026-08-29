@@ -18,6 +18,8 @@ from src.board_planner import (
 from src.branch_engine import FinalBranchDesignRequest, calculate_final_branch
 from src.connection import connection_options_for_phase
 from src.field_rollup import calculate_field_rollups, enrich_graph_with_field_rollups
+from src.hierarchy_display import enrich_graph_with_hierarchy_plan
+from src.hierarchy_planner import calculate_board_hierarchy
 from src.single_line_svg import render_board_graph_svg
 
 st.set_page_config(
@@ -247,9 +249,13 @@ def build_draft_graph(branch_results):
         if branch["kind"] == "final":
             mode = branch.get("mode", "auto")
             preview = branch_results.get(uid)
-            if mode == "manual" and preview is not None and preview.connection_rating_a is not None:
-                display_detail = f"Manual · {preview.connection_rating_a:g} A outlet"
+            if mode == "manual":
                 graph_load_kw = None
+                display_detail = (
+                    f"Manual · {preview.connection_rating_a:g} A outlet"
+                    if preview is not None and preview.connection_rating_a is not None
+                    else "Manual · outlet pending"
+                )
             else:
                 display_detail = None
                 graph_load_kw = float(branch["load_kw"])
@@ -740,7 +746,7 @@ with workspace_right:
                 with c2:
                     sub_board_id = st.text_input("Sub-board ID", value=str(selected_branch["sub_board_id"]), key=f"sub_board_id_{uid}")
                 sub_description = st.text_input("Sub-board description", value=str(selected_branch["description"]), key=f"sub_desc_{uid}")
-                st.caption("A sub-board is a separate calculation boundary. Its demand is not yet propagated into the upstream feeder.")
+                st.caption("A sub-board is a separate calculation boundary. Its calculated phase demand now rolls up recursively into its upstream feeder; protection remains provisional.")
                 if (
                     feeder_id.strip() != str(selected_branch["feeder_id"]).strip()
                     or sub_board_id.strip() != str(selected_branch["sub_board_id"]).strip()
@@ -757,14 +763,23 @@ except (TypeError, ValueError) as exc:
     draft_graph = None
     graph_error = str(exc)
 
-live_plan = None
-live_plan_error = None
-try:
-    root_request = build_live_root_request(branch_results)
-    if root_request is not None:
-        live_plan = calculate_board_plan(root_request)
-except (TypeError, ValueError) as exc:
-    live_plan_error = str(exc)
+hierarchy_plan = None
+hierarchy_plan_error = None
+if draft_graph is not None:
+    try:
+        exact_requests = tuple(
+            result.circuit.request
+            for result in branch_results.values()
+        )
+        hierarchy_plan = calculate_board_hierarchy(
+            draft_graph,
+            circuit_request_overrides=exact_requests,
+        )
+    except (TypeError, ValueError) as exc:
+        hierarchy_plan_error = str(exc)
+
+live_plan = hierarchy_plan.root.plan if hierarchy_plan is not None else None
+live_plan_error = hierarchy_plan_error
 
 field_rollups = tuple()
 field_rollup_error = None
@@ -776,13 +791,15 @@ if draft_graph is not None and live_plan is not None:
 
 st.markdown("---")
 st.markdown("### Live single-line diagram")
-st.markdown('<div class="workflow-note">The diagram, field feeders and board demand update automatically as you edit. No separate calculate step is required for normal planning.</div>', unsafe_allow_html=True)
+st.markdown('<div class="workflow-note">The diagram, field feeders, sub-board demand and board demand update automatically as you edit. No separate calculate step is required for normal planning.</div>', unsafe_allow_html=True)
 
 if graph_error:
     st.error(graph_error)
 elif draft_graph is not None:
     display_graph = draft_graph
-    if live_plan is not None:
+    if hierarchy_plan is not None:
+        display_graph = enrich_graph_with_hierarchy_plan(draft_graph, hierarchy_plan)
+    elif live_plan is not None:
         display_graph = enrich_graph_with_plan(draft_graph, live_plan)
     if field_rollups:
         display_graph = enrich_graph_with_field_rollups(display_graph, field_rollups)
@@ -795,7 +812,7 @@ st.markdown("### Live board summary")
 if live_plan_error:
     st.warning(live_plan_error)
 elif live_plan is None:
-    st.caption("Add a final circuit on this board to start the live board calculation.")
+    st.caption("Add a final circuit on this board or a downstream board to start the live board calculation.")
 else:
     incomer = live_plan.incomer_candidate
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -834,9 +851,10 @@ else:
         st.write(f"• {incomer.basis}")
         st.write("• Automatic phase allocation is a planning heuristic, not an imbalance-compliance check.")
         st.write("• Manual outlet mode fixes the rated outlet current as the branch requirement; it does not invent a consumer load.")
-        st.write("• Field feeders now roll up their calculated child phase currents. The highest phase current is used with no additional field diversity; feeder breaker/cable values remain planning candidates.")
+        st.write("• Field feeders roll up their calculated child phase currents. The highest phase current is used with no additional field diversity; feeder breaker/cable values remain planning candidates.")
         st.write("• For fields containing single-phase child circuits, neutral loading and harmonic effects are not verified by the current feeder cable route.")
-        st.write("• Sub-board feeder demand, busbar rating, selectivity, fault-level checks and final protection verification are not implemented yet.")
+        st.write("• Sub-board phase demand now propagates recursively into the parent board without flattening child circuits. Sub-board feeder breaker ratings remain provisional planning candidates; feeder cable sizing requires explicit installation inputs.")
+        st.write("• Busbar rating, selectivity, fault-level checks and final protection verification are not implemented yet.")
         blocking = tuple(c for c in live_plan.circuits if c.verification.blocking_issues)
         for circuit_result in blocking:
             st.markdown(f"**{circuit_result.request.circuit_id} · {circuit_result.request.description}**")
