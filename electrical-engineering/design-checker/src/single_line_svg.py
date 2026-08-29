@@ -103,7 +103,11 @@ def _visible_text(graph: BoardElectricalGraph, node: ElectricalNode) -> tuple[st
             if incomer is not None and incomer.rating_a is not None
             else "incomer rating pending"
         )
-        return node.label, f"{node.board_ref or 'Sub-board'} · {incomer_text}", branch_info
+        detail_bits = [node.board_ref or "Sub-board"]
+        if node.display_detail:
+            detail_bits.append(node.display_detail)
+        detail_bits.append(incomer_text)
+        return node.label, " · ".join(detail_bits), branch_info
     return node.label, node.kind.replace("_", " "), branch_info
 
 
