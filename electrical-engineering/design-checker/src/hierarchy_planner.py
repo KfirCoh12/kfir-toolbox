@@ -5,17 +5,15 @@ L1/L2/L3 current vector is propagated to its parent as a BoardPhaseContribution,
 not flattened into the parent's local circuit list and not replaced by a fictitious
 balanced three-phase load.
 
-This module performs no extra diversity. Feeder breaker ratings are conventional
-planning candidates only. Feeder cable sizing is intentionally absent because the
-hierarchy does not yet carry reviewed feeder material/installation data. Protection,
-selectivity, fault level, neutral/harmonic effects and transformer phase shift are not
-verified here.
+Callers may also supply exact CircuitDesignRequest overrides for graph loads whose
+real basis is fixed current or kVA. The hierarchy therefore preserves that basis
+without converting it to an invented kW value.
 """
 from dataclasses import dataclass, replace
 from typing import Literal
 
 from .board_boundaries import BoardCalculationBoundary, calculation_boundaries_from_graph
-from .board_graph import BoardElectricalGraph, ElectricalNode, validate_board_graph
+from .board_graph import BoardElectricalGraph, validate_board_graph
 from .board_planner import (
     BoardPhaseContribution,
     BoardPlanRequest,
@@ -23,6 +21,7 @@ from .board_planner import (
     calculate_board_plan,
 )
 from .catalogs import BREAKER_RATINGS_A
+from .circuit_engine import CircuitDesignRequest
 
 HierarchyBoardStatus = Literal["CALCULATED", "NO_DEMAND"]
 FeederRollupStatus = Literal["PROVISIONAL", "NO_DEMAND", "NO_CANDIDATE"]
@@ -130,9 +129,7 @@ def _contribution_from_child(
     )
 
 
-def _feeder_rollup(
-    board: HierarchyBoardResult,
-) -> SubBoardFeederRollup:
+def _feeder_rollup(board: HierarchyBoardResult) -> SubBoardFeederRollup:
     if board.parent_board_id is None or board.feeder_circuit_id is None:
         raise ValueError("root board does not have an upstream feeder rollup")
     if board.plan is None:
@@ -177,10 +174,16 @@ def _feeder_rollup(
 
 def calculate_board_hierarchy(
     graph: BoardElectricalGraph,
+    circuit_request_overrides: tuple[CircuitDesignRequest, ...] = tuple(),
 ) -> BoardHierarchyPlanResult:
-    """Calculate every board bottom-up and propagate child phase vectors upstream."""
+    """Calculate every board bottom-up and propagate child phase vectors upstream.
+
+    Exact circuit overrides are passed into boundary construction before any board is
+    solved. A fixed-A or kVA load therefore remains fixed-A or kVA at every hierarchy
+    depth and in generated schedule rows.
+    """
     validate_board_graph(graph)
-    boundaries = calculation_boundaries_from_graph(graph)
+    boundaries = calculation_boundaries_from_graph(graph, circuit_request_overrides)
     boundary_by_id = {boundary.board_id: boundary for boundary in boundaries}
     if len(boundary_by_id) != len(boundaries):
         raise ValueError("board calculation boundaries must have unique board_id values")
