@@ -9,6 +9,11 @@ Callers may also supply exact CircuitDesignRequest overrides for graph loads who
 real basis is fixed current or kVA. The hierarchy therefore preserves that basis
 without converting it to an invented kW value.
 
+Sub-board feeder phase mapping is explicit. Identity mapping is used when no mapping
+is declared; callers can provide a reviewed permutation when transformer phase shift
+or intentional phase transposition means child L1/L2/L3 do not align with the same
+parent phase labels. No vector-group behavior is inferred automatically.
+
 Sub-board feeder cable sizing remains opt-in. A caller must explicitly declare the
 feeder installation conditions, and automatic cable selection is only attempted when
 the complete downstream hierarchy contains no single-phase final loads. This keeps
@@ -39,6 +44,23 @@ FeederCableStatus = Literal[
     "NO_CANDIDATE",
     "NOT_APPLICABLE",
 ]
+BoardPhase = Literal["L1", "L2", "L3"]
+
+
+@dataclass(frozen=True)
+class FeederPhaseMappingDeclaration:
+    """Explicit mapping from one child-board phase vector into its parent board.
+
+    The three target phases must be a permutation of L1/L2/L3. This models phase-label
+    rotation/transposition only; it does not calculate transformer vector-group angle,
+    zero-sequence behavior, or any other network effect.
+    """
+
+    feeder_circuit_id: str
+    child_l1_to_parent: BoardPhase
+    child_l2_to_parent: BoardPhase
+    child_l3_to_parent: BoardPhase
+    basis_note: str
 
 
 @dataclass(frozen=True)
@@ -161,20 +183,60 @@ def _base_request(
     return replace(boundary.request, phase_contributions=contributions)
 
 
+def _validate_phase_mapping(declaration: FeederPhaseMappingDeclaration) -> None:
+    if not declaration.feeder_circuit_id.strip():
+        raise ValueError("feeder phase mapping feeder_circuit_id is required")
+    targets = (
+        declaration.child_l1_to_parent,
+        declaration.child_l2_to_parent,
+        declaration.child_l3_to_parent,
+    )
+    if any(target not in ("L1", "L2", "L3") for target in targets):
+        raise ValueError("feeder phase mapping targets must be L1, L2 or L3")
+    if len(set(targets)) != 3:
+        raise ValueError("feeder phase mapping must be a one-to-one phase permutation")
+    if not declaration.basis_note.strip():
+        raise ValueError("feeder phase mapping basis_note is required")
+
+
+def _mapped_phase_currents(
+    child_plan: BoardPlanResult,
+    mapping: FeederPhaseMappingDeclaration | None,
+) -> tuple[float, float, float]:
+    balance = child_plan.phase_balance
+    if mapping is None:
+        return balance.l1_current_a, balance.l2_current_a, balance.l3_current_a
+
+    parent: dict[BoardPhase, float] = {"L1": 0.0, "L2": 0.0, "L3": 0.0}
+    parent[mapping.child_l1_to_parent] = balance.l1_current_a
+    parent[mapping.child_l2_to_parent] = balance.l2_current_a
+    parent[mapping.child_l3_to_parent] = balance.l3_current_a
+    return parent["L1"], parent["L2"], parent["L3"]
+
+
 def _contribution_from_child(
     child_board_id: str,
     feeder_circuit_id: str,
     child_plan: BoardPlanResult,
+    mapping: FeederPhaseMappingDeclaration | None,
 ) -> BoardPhaseContribution:
-    balance = child_plan.phase_balance
+    l1, l2, l3 = _mapped_phase_currents(child_plan, mapping)
+    if mapping is None:
+        mapping_basis = "Identity child-to-parent phase mapping used (L1→L1, L2→L2, L3→L3)."
+    else:
+        mapping_basis = (
+            f"Declared child-to-parent mapping L1→{mapping.child_l1_to_parent}, "
+            f"L2→{mapping.child_l2_to_parent}, L3→{mapping.child_l3_to_parent}. "
+            f"Mapping basis: {mapping.basis_note.strip()}"
+        )
     return BoardPhaseContribution(
         contribution_id=feeder_circuit_id,
-        l1_current_a=balance.l1_current_a,
-        l2_current_a=balance.l2_current_a,
-        l3_current_a=balance.l3_current_a,
+        l1_current_a=l1,
+        l2_current_a=l2,
+        l3_current_a=l3,
         basis=(
             f"Calculated downstream board {child_board_id} phase demand propagated "
-            "without additional hierarchy-level diversity."
+            f"without additional hierarchy-level diversity. {mapping_basis}"
         ),
     )
 
@@ -226,6 +288,7 @@ def _feeder_rollup(
     graph: BoardElectricalGraph,
     board: HierarchyBoardResult,
     installation: FeederInstallationDeclaration | None,
+    phase_mapping: FeederPhaseMappingDeclaration | None,
 ) -> SubBoardFeederRollup:
     if board.parent_board_id is None or board.feeder_circuit_id is None:
         raise ValueError("root board does not have an upstream feeder rollup")
@@ -252,9 +315,18 @@ def _feeder_rollup(
     balance = board.plan.phase_balance
     required = balance.max_phase_current_a
     rating = next((float(value) for value in BREAKER_RATINGS_A if value >= required), None)
+    mapping_limitation = (
+        "Identity child-to-parent phase mapping is used; no transformer phase-label rotation is inferred."
+        if phase_mapping is None
+        else (
+            f"Upstream phase propagation uses declared mapping L1→{phase_mapping.child_l1_to_parent}, "
+            f"L2→{phase_mapping.child_l2_to_parent}, L3→{phase_mapping.child_l3_to_parent}; "
+            "transformer vector-group angle and zero-sequence behavior are not calculated."
+        )
+    )
     base_limitations = [
         "Breaker rating is a conventional planning candidate only; protection and selectivity are not verified.",
-        "L1/L2/L3 are assumed phase-aligned between parent and child boards; transformer phase shift is not modeled.",
+        mapping_limitation,
     ]
 
     if installation is None:
@@ -374,6 +446,7 @@ def calculate_board_hierarchy(
     graph: BoardElectricalGraph,
     circuit_request_overrides: tuple[CircuitDesignRequest, ...] = tuple(),
     feeder_installations: tuple[FeederInstallationDeclaration, ...] = tuple(),
+    feeder_phase_mappings: tuple[FeederPhaseMappingDeclaration, ...] = tuple(),
 ) -> BoardHierarchyPlanResult:
     """Calculate every board bottom-up and propagate child phase vectors upstream.
 
@@ -384,6 +457,10 @@ def calculate_board_hierarchy(
     Feeder installation declarations are optional. Without one, the hierarchy still
     returns demand and a conventional breaker candidate but intentionally leaves the
     feeder cable unresolved.
+
+    Feeder phase mappings are optional. Without one, identity phase-label alignment is
+    used explicitly. A declaration may only provide a one-to-one permutation of the
+    three child phases into the parent phases; no transformer vector group is inferred.
     """
     validate_board_graph(graph)
     boundaries = calculation_boundaries_from_graph(graph, circuit_request_overrides)
@@ -422,6 +499,16 @@ def calculate_board_hierarchy(
             raise ValueError(f"feeder installation references unknown sub-board feeder {feeder_id}")
         installation_by_feeder[feeder_id] = declaration
 
+    mapping_by_feeder: dict[str, FeederPhaseMappingDeclaration] = {}
+    for declaration in feeder_phase_mappings:
+        _validate_phase_mapping(declaration)
+        feeder_id = declaration.feeder_circuit_id.strip()
+        if feeder_id in mapping_by_feeder:
+            raise ValueError(f"duplicate feeder phase mapping declaration for {feeder_id}")
+        if feeder_id not in valid_feeder_ids:
+            raise ValueError(f"feeder phase mapping references unknown sub-board feeder {feeder_id}")
+        mapping_by_feeder[feeder_id] = declaration
+
     solved: dict[str, HierarchyBoardResult] = {}
     visiting: set[str] = set()
 
@@ -444,7 +531,12 @@ def calculate_board_hierarchy(
             if child.feeder_circuit_id is None:
                 raise ValueError(f"downstream board {child_id} requires feeder_circuit_id")
             contributions.append(
-                _contribution_from_child(child_id, child.feeder_circuit_id, child.plan)
+                _contribution_from_child(
+                    child_id,
+                    child.feeder_circuit_id,
+                    child.plan,
+                    mapping_by_feeder.get(child.feeder_circuit_id),
+                )
             )
 
         request = _base_request(graph, boundary, tuple(contributions))
@@ -475,6 +567,7 @@ def calculate_board_hierarchy(
             graph,
             board,
             installation_by_feeder.get(board.feeder_circuit_id or ""),
+            mapping_by_feeder.get(board.feeder_circuit_id or ""),
         )
         for board in ordered_boards
         if board.parent_board_id is not None
