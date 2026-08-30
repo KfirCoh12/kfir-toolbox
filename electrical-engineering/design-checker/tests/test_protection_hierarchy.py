@@ -5,6 +5,7 @@ from src.board_graph import add_radial_circuit, add_sub_board_feeder, make_radia
 from src.protection_hierarchy import (
     protection_chain_for_node,
     protection_chains,
+    protection_coordination_assessments,
     protection_relationships,
 )
 
@@ -148,6 +149,91 @@ class ProtectionHierarchyTests(unittest.TestCase):
         chain = protection_chain_for_node(graph, "C-01:device")
         self.assertEqual(tuple(device.rating_a for device in chain.devices), (63.0, 16.0))
         self.assertTrue(chain.ratings_complete)
+
+    def test_pair_coordination_defaults_to_not_checked_even_when_ratings_are_ordered(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="DB-01", description="Board"),
+            circuit_id="C-01",
+            description="Load",
+        )
+        graph = replace(
+            graph,
+            nodes=tuple(
+                replace(node, rating_a=63.0) if node.node_id == "incomer"
+                else replace(node, rating_a=16.0) if node.node_id == "C-01:device"
+                else node
+                for node in graph.nodes
+            ),
+        )
+        assessment = protection_coordination_assessments(graph)[0]
+        self.assertEqual(assessment.upstream_rating_a, 63.0)
+        self.assertEqual(assessment.downstream_rating_a, 16.0)
+        self.assertEqual(assessment.coordination.protection_status, "NOT CHECKED")
+        self.assertEqual(assessment.coordination.selectivity_status, "NOT CHECKED")
+
+    def test_requested_pair_selectivity_is_insufficient_without_real_evidence(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="DB-01", description="Board"),
+            circuit_id="C-01",
+            description="Load",
+        )
+        graph = replace(
+            graph,
+            nodes=tuple(
+                replace(node, rating_a=100.0) if node.node_id == "incomer"
+                else replace(node, rating_a=10.0) if node.node_id == "C-01:device"
+                else node
+                for node in graph.nodes
+            ),
+        )
+        assessment = protection_coordination_assessments(
+            graph,
+            selectivity_check_requested=True,
+        )[0]
+        self.assertEqual(assessment.coordination.protection_status, "NOT CHECKED")
+        self.assertEqual(assessment.coordination.selectivity_status, "INSUFFICIENT DATA")
+        self.assertNotEqual(assessment.coordination.selectivity_status, "VERIFIED")
+        self.assertIn(
+            "manufacturer selectivity/coordination table or verified time-current evidence",
+            assessment.coordination.missing_evidence,
+        )
+
+    def test_missing_ratings_do_not_block_topology_but_cannot_verify_coordination(self):
+        graph = add_radial_circuit(
+            make_radial_board_graph(board_id="DB-01", description="Board"),
+            circuit_id="C-01",
+            description="Load",
+        )
+        assessment = protection_coordination_assessments(
+            graph,
+            protection_check_requested=True,
+            selectivity_check_requested=True,
+        )[0]
+        self.assertIsNone(assessment.upstream_rating_a)
+        self.assertIsNone(assessment.downstream_rating_a)
+        self.assertEqual(assessment.coordination.protection_status, "INSUFFICIENT DATA")
+        self.assertEqual(assessment.coordination.selectivity_status, "INSUFFICIENT DATA")
+
+    def test_nested_chain_produces_one_coordination_assessment_per_adjacent_pair(self):
+        graph = self._nested_graph()
+        assessments = protection_coordination_assessments(graph)
+        pairs = {
+            (
+                assessment.relationship.upstream_node_id,
+                assessment.relationship.downstream_node_id,
+            )
+            for assessment in assessments
+        }
+        self.assertEqual(
+            pairs,
+            {
+                ("incomer", "F-01:device"),
+                ("F-01:device", "F-01:DB-L1:incomer"),
+                ("F-01:DB-L1:incomer", "F-02:device"),
+                ("F-02:device", "F-02:DB-L2:incomer"),
+                ("F-02:DB-L2:incomer", "L2-C01:device"),
+            },
+        )
 
     def test_chain_rejects_non_protective_or_unknown_endpoint(self):
         graph = add_radial_circuit(
