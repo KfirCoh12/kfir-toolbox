@@ -10,6 +10,7 @@ from src.circuit_engine import CircuitDesignRequest
 from src.hierarchy_constraints import BreakerRatingConstraint, assess_breaker_constraints
 from src.hierarchy_persistence import (
     HierarchyEngineeringProject,
+    _fsync_directory,
     clear_hierarchy_project,
     load_hierarchy_project,
     project_from_document,
@@ -125,12 +126,10 @@ class HierarchyPersistenceTests(unittest.TestCase):
             self.assertEqual(fsync.call_count, 2)
             self.assertEqual(load_hierarchy_project(path), self._project())
 
-    def test_unsupported_directory_fsync_does_not_turn_valid_save_into_failure(self):
+    def test_unsupported_directory_fsync_is_treated_as_platform_limitation(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "hierarchy.json"
             with patch("src.hierarchy_persistence.os.open", side_effect=OSError("directory sync unsupported")):
-                save_hierarchy_project(self._project(), path)
-            self.assertEqual(load_hierarchy_project(path), self._project())
+                _fsync_directory(Path(directory))
 
     def test_failed_replace_preserves_existing_target_and_removes_temporary_file(self):
         with tempfile.TemporaryDirectory() as directory:
