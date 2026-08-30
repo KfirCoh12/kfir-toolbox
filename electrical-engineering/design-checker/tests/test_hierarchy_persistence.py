@@ -117,12 +117,19 @@ class HierarchyPersistenceTests(unittest.TestCase):
                 assess_breaker_constraints(restored.graph, after, restored.breaker_constraints),
             )
 
-    def test_save_flushes_temporary_file_to_os_before_replace(self):
+    def test_save_flushes_file_and_directory_metadata_when_supported(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "hierarchy.json"
             with patch("src.hierarchy_persistence.os.fsync") as fsync:
                 save_hierarchy_project(self._project(), path)
-            fsync.assert_called_once()
+            self.assertEqual(fsync.call_count, 2)
+            self.assertEqual(load_hierarchy_project(path), self._project())
+
+    def test_unsupported_directory_fsync_does_not_turn_valid_save_into_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hierarchy.json"
+            with patch("src.hierarchy_persistence.os.open", side_effect=OSError("directory sync unsupported")):
+                save_hierarchy_project(self._project(), path)
             self.assertEqual(load_hierarchy_project(path), self._project())
 
     def test_failed_replace_preserves_existing_target_and_removes_temporary_file(self):
