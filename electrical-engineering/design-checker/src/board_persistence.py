@@ -4,11 +4,20 @@ Local use defaults to storage outside the repository so Git pulls and checkouts 
 not overwrite it or accidentally commit project-specific board data. Hosted
 instances can point the same persistence layer at a private mounted data directory
 through ``KFIR_TOOLBOX_DATA_DIR`` without changing application code.
+
+Private hosted sessions may additionally enter ``persistence_scope_for_email``.
+That scope stores board data below an opaque per-user directory so authenticated
+users cannot overwrite one another's working boards. The email itself is never
+written into the filesystem path.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -18,6 +27,10 @@ _LOCAL_DATA_ROOT = Path.home() / ".kfir-toolbox"
 _DEFAULT_LINE_TO_LINE_V = 400.0
 _DEFAULT_LINE_TO_NEUTRAL_V = 230.0
 _WIDGET_MINIMUM_SUPPLY = (1.0, 1.0)
+_CURRENT_USER_STORAGE_KEY: ContextVar[str | None] = ContextVar(
+    "kfir_toolbox_user_storage_key",
+    default=None,
+)
 
 
 def toolbox_data_root() -> Path:
@@ -33,8 +46,37 @@ def toolbox_data_root() -> Path:
     return Path(configured).expanduser()
 
 
+def storage_key_for_email(email: str) -> str:
+    """Return a deterministic opaque storage key for an authenticated email."""
+    normalized = str(email).strip().lower()
+    if not normalized:
+        raise ValueError("Authenticated email is required for user-scoped persistence.")
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return f"user-{digest}"
+
+
+@contextmanager
+def persistence_scope_for_email(email: str) -> Iterator[str]:
+    """Scope persistence to one authenticated user for the current execution context.
+
+    ContextVar keeps the identity local to the current Streamlit execution context
+    instead of mutating process-wide environment variables, which would be unsafe
+    when multiple users are served by the same Python process.
+    """
+    storage_key = storage_key_for_email(email)
+    token = _CURRENT_USER_STORAGE_KEY.set(storage_key)
+    try:
+        yield storage_key
+    finally:
+        _CURRENT_USER_STORAGE_KEY.reset(token)
+
+
 def board_autosave_path() -> Path:
-    return toolbox_data_root() / "board-planner" / "last_board.json"
+    root = toolbox_data_root()
+    storage_key = _CURRENT_USER_STORAGE_KEY.get()
+    if storage_key is not None:
+        root = root / "users" / storage_key
+    return root / "board-planner" / "last_board.json"
 
 
 def _is_widget_minimum_supply(payload: dict) -> bool:
