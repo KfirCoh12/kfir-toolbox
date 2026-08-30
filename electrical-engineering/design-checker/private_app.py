@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from src.auth import allowed_emails, authentication_required, require_authenticated_user
+from src.board_persistence import persistence_scope_for_email
 
 
 if not authentication_required():
@@ -22,7 +23,10 @@ if not allowed_emails():
     )
     st.stop()
 
-require_authenticated_user(st)
+email = require_authenticated_user(st)
+if email is None:
+    st.error("Private hosting could not establish an authenticated user identity.")
+    st.stop()
 
 navigation = st.navigation(
     [
@@ -30,4 +34,5 @@ navigation = st.navigation(
         st.Page("pages/3_Board_Planner.py", title="Board Planner", icon="⚡"),
     ]
 )
-navigation.run()
+with persistence_scope_for_email(email):
+    navigation.run()
