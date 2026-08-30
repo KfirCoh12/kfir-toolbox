@@ -59,6 +59,78 @@ def _board_for_incomer(node: ElectricalNode) -> str:
     return board_id
 
 
+def _owning_board_id(graph: BoardElectricalGraph, node: ElectricalNode) -> str:
+    for ancestor in graph.ancestors_of(node.node_id):
+        if ancestor.kind == "busbar" and (ancestor.board_ref or "").strip():
+            return (ancestor.board_ref or "").strip()
+    raise ValueError(f"node {node.node_id} has no owning board busbar")
+
+
+def _validate_hierarchy_identity(
+    graph: BoardElectricalGraph,
+    hierarchy: BoardHierarchyPlanResult,
+) -> None:
+    """Reject hierarchy results calculated from a different electrical topology.
+
+    Board IDs alone are not a sufficient identity check: two graphs can use the same
+    board names while containing different final circuits or sub-board feeders. Rating
+    assessments must therefore confirm the circuit ownership and feeder relationships
+    that provide the calculated current requirements before using those requirements.
+    """
+    hierarchy_board_ids = {board.board_id for board in hierarchy.boards}
+    graph_board_ids = {
+        graph.board_id.strip(),
+        *(
+            (node.board_ref or "").strip()
+            for node in graph.nodes
+            if node.kind == "sub_board"
+        ),
+    }
+    if hierarchy_board_ids != graph_board_ids:
+        raise ValueError("hierarchy result does not belong to this graph")
+
+    graph_circuit_owner: dict[str, str] = {}
+    for node in graph.nodes:
+        if node.kind != "load":
+            continue
+        circuit_id = (node.circuit_id or "").strip()
+        if not circuit_id:
+            raise ValueError(f"load node {node.node_id} requires circuit_id")
+        graph_circuit_owner[circuit_id] = _owning_board_id(graph, node)
+
+    hierarchy_circuit_owner: dict[str, str] = {}
+    for board_id, plan in hierarchy.plans_by_board_id.items():
+        for circuit in plan.circuits:
+            circuit_id = circuit.request.circuit_id.strip()
+            if circuit_id in hierarchy_circuit_owner:
+                raise ValueError(f"circuit {circuit_id} appears in multiple hierarchy board plans")
+            hierarchy_circuit_owner[circuit_id] = board_id
+
+    if hierarchy_circuit_owner != graph_circuit_owner:
+        raise ValueError("hierarchy result final-circuit topology does not match this graph")
+
+    graph_feeders: dict[str, tuple[str, str]] = {}
+    for node in graph.nodes:
+        if node.kind != "sub_board":
+            continue
+        feeder_id = (node.circuit_id or "").strip()
+        child_board_id = (node.board_ref or "").strip()
+        if not feeder_id:
+            raise ValueError(f"sub_board node {node.node_id} requires circuit_id")
+        if not child_board_id:
+            raise ValueError(f"sub_board node {node.node_id} requires board_ref")
+        graph_feeders[feeder_id] = (_owning_board_id(graph, node), child_board_id)
+
+    hierarchy_feeders = {
+        rollup.feeder_circuit_id: (rollup.parent_board_id, rollup.board_id)
+        for rollup in hierarchy.feeder_rollups
+    }
+    if len(hierarchy_feeders) != len(hierarchy.feeder_rollups):
+        raise ValueError("sub-board feeder circuit IDs must be unique")
+    if hierarchy_feeders != graph_feeders:
+        raise ValueError("hierarchy result sub-board feeder topology does not match this graph")
+
+
 def _requirements(
     graph: BoardElectricalGraph,
     hierarchy: BoardHierarchyPlanResult,
@@ -121,17 +193,7 @@ def assess_breaker_constraints(
 ) -> tuple[BreakerConstraintAssessment, ...]:
     """Compare declared ratings with calculated current requirements at graph nodes."""
     validate_board_graph(graph)
-    hierarchy_board_ids = {board.board_id for board in hierarchy.boards}
-    graph_board_ids = {
-        graph.board_id.strip(),
-        *(
-            (node.board_ref or "").strip()
-            for node in graph.nodes
-            if node.kind == "sub_board"
-        ),
-    }
-    if hierarchy_board_ids != graph_board_ids:
-        raise ValueError("hierarchy result does not belong to this graph")
+    _validate_hierarchy_identity(graph, hierarchy)
 
     by_node = graph.node_by_id
     seen: set[str] = set()
