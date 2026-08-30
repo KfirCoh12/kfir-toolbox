@@ -28,18 +28,19 @@ if email is None:
     st.error("Private hosting could not establish an authenticated user identity.")
     st.stop()
 
-navigation = st.navigation(
-    [
-        st.Page("app.py", title="Electrical Design Checker", icon="⚡", default=True),
-        st.Page("pages/3_Board_Planner.py", title="Board Planner", icon="⚡"),
-    ],
-    expanded=True,
-)
+checker_page = st.Page("app.py", title="Electrical Design Checker", icon="⚡", default=True)
+board_page = st.Page("pages/3_Board_Planner.py", title="Board Planner", icon="⚡")
 
-# The entrypoint is Streamlit's shared frame and reruns for every navigation page.
-# Render authentication controls after st.navigation so they remain below the
-# navigation menu on every page instead of being hidden by the navigation widget.
-st.sidebar.button("Log out", on_click=st.logout, use_container_width=True, key="private_logout")
+# Register the pages without drawing Streamlit's built-in navigation. This is the
+# documented pattern for a custom navigation menu and lets the logout control live
+# in the same sidebar container as the page links.
+navigation = st.navigation([checker_page, board_page], position="hidden")
+
+with st.sidebar:
+    st.page_link(checker_page, label="Electrical Design Checker", icon="⚡")
+    st.page_link(board_page, label="Board Planner", icon="⚡")
+    st.divider()
+    st.button("Log out", on_click=st.logout, use_container_width=True, key="private_logout")
 
 with persistence_scope_for_email(email):
     navigation.run()
