@@ -1,9 +1,17 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from src.board_persistence import clear_last_board, load_last_board, save_last_board
+from src.board_persistence import (
+    board_autosave_path,
+    clear_last_board,
+    load_last_board,
+    save_last_board,
+    toolbox_data_root,
+)
 
 
 class BoardPersistenceTests(unittest.TestCase):
@@ -45,6 +53,22 @@ class BoardPersistenceTests(unittest.TestCase):
             document = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(document["schema_version"], 1)
             self.assertEqual(document["board"], {"branches": []})
+
+    def test_hosted_data_directory_can_be_configured_without_changing_callers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.dict(os.environ, {"KFIR_TOOLBOX_DATA_DIR": folder}):
+                self.assertEqual(toolbox_data_root(), Path(folder))
+                self.assertEqual(
+                    board_autosave_path(),
+                    Path(folder) / "board-planner" / "last_board.json",
+                )
+                payload = {"board_id": "DB-01", "branches": []}
+                save_last_board(payload)
+                self.assertEqual(load_last_board(), payload)
+
+    def test_blank_hosted_data_directory_keeps_local_default(self):
+        with patch.dict(os.environ, {"KFIR_TOOLBOX_DATA_DIR": "   "}):
+            self.assertEqual(toolbox_data_root(), Path.home() / ".kfir-toolbox")
 
     def test_legacy_widget_minimum_supply_is_repaired_on_load(self):
         payload = {
