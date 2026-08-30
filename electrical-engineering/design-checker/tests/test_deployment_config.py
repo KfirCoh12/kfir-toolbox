@@ -13,6 +13,7 @@ class DeploymentConfigTests(unittest.TestCase):
         cls.private_app = (cls.root / "private_app.py").read_text(encoding="utf-8")
         cls.secrets_example = (cls.root / ".streamlit" / "secrets.toml.example").read_text(encoding="utf-8")
         cls.private_deployment = (cls.root / "docs" / "PRIVATE_DEPLOYMENT.md").read_text(encoding="utf-8")
+        cls.render_blueprint = (cls.root / "render.yaml").read_text(encoding="utf-8")
 
     def test_container_runs_private_streamlit_entrypoint_on_external_interface(self):
         self.assertIn("streamlit run private_app.py", self.dockerfile)
@@ -60,6 +61,16 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn("persistent private volume at `/data`", self.private_deployment)
         self.assertIn("authenticated but non-allowlisted Google account is denied", self.private_deployment)
         self.assertIn("should not be described as private until these checks pass", self.private_deployment)
+
+    def test_render_blueprint_uses_private_container_and_persistent_disk(self):
+        self.assertIn("runtime: docker", self.render_blueprint)
+        self.assertIn("rootDir: electrical-engineering/design-checker", self.render_blueprint)
+        self.assertIn("healthCheckPath: /_stcore/health", self.render_blueprint)
+        self.assertIn("KFIR_TOOLBOX_REQUIRE_AUTH", self.render_blueprint)
+        self.assertIn("KFIR_TOOLBOX_ALLOWED_EMAILS", self.render_blueprint)
+        self.assertIn("sync: false", self.render_blueprint)
+        self.assertIn("mountPath: /data", self.render_blueprint)
+        self.assertIn("sizeGB: 1", self.render_blueprint)
 
     def test_persistence_supports_private_hosted_data_mount(self):
         self.assertIn("KFIR_TOOLBOX_DATA_DIR", self.persistence)
