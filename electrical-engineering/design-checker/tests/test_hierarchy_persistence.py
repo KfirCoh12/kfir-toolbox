@@ -1,3 +1,4 @@
+import copy
 import json
 import tempfile
 import unittest
@@ -5,6 +6,7 @@ from pathlib import Path
 
 from src.board_graph import add_radial_circuit, add_sub_board_feeder, make_radial_board_graph
 from src.circuit_engine import CircuitDesignRequest
+from src.hierarchy_constraints import BreakerRatingConstraint, assess_breaker_constraints
 from src.hierarchy_persistence import (
     HierarchyEngineeringProject,
     clear_hierarchy_project,
@@ -63,11 +65,17 @@ class HierarchyPersistenceTests(unittest.TestCase):
             child_l3_to_parent="L1",
             basis_note="Reviewed phase transposition",
         )
+        constraint = BreakerRatingConstraint(
+            node_id="C-01:device",
+            rating_a=32.0,
+            basis_note="Existing downstream breaker rating",
+        )
         return HierarchyEngineeringProject(
             graph=graph,
             circuit_request_overrides=(override,),
             feeder_installations=(installation,),
             feeder_phase_mappings=(mapping,),
+            breaker_constraints=(constraint,),
         )
 
     def test_document_round_trip_preserves_source_inputs(self):
@@ -75,7 +83,12 @@ class HierarchyPersistenceTests(unittest.TestCase):
         document = project_to_document(project)
         restored = project_from_document(document)
         self.assertEqual(restored, project)
+        self.assertEqual(document["schema_version"], 2)
         self.assertIsInstance(document["project"]["graph"]["nodes"][0]["issue_codes"], list)
+        self.assertEqual(
+            document["project"]["breaker_constraints"][0]["node_id"],
+            "C-01:device",
+        )
 
     def test_file_round_trip_preserves_inputs_and_recalculates_same_hierarchy(self):
         project = self._project()
@@ -98,13 +111,35 @@ class HierarchyPersistenceTests(unittest.TestCase):
                 restored.feeder_phase_mappings,
             )
             self.assertEqual(after, before)
+            self.assertEqual(
+                assess_breaker_constraints(project.graph, before, project.breaker_constraints),
+                assess_breaker_constraints(restored.graph, after, restored.breaker_constraints),
+            )
 
     def test_saved_document_contains_inputs_not_calculated_results(self):
         document = project_to_document(self._project())
         serialized = json.dumps(document)
+        self.assertIn("breaker_constraints", serialized)
+        self.assertNotIn("BreakerConstraintAssessment", serialized)
+        self.assertNotIn("required_current_a", serialized)
         self.assertNotIn("feeder_rollups", serialized)
         self.assertNotIn("breaker_candidate_a", serialized)
         self.assertNotIn("cable_candidate_mm2", serialized)
+
+    def test_version_one_document_migrates_with_empty_breaker_constraints(self):
+        document = project_to_document(self._project())
+        legacy = copy.deepcopy(document)
+        legacy["schema_version"] = 1
+        del legacy["project"]["breaker_constraints"]
+
+        restored = project_from_document(legacy)
+
+        self.assertEqual(restored.graph, self._project().graph)
+        self.assertEqual(restored.circuit_request_overrides, self._project().circuit_request_overrides)
+        self.assertEqual(restored.feeder_installations, self._project().feeder_installations)
+        self.assertEqual(restored.feeder_phase_mappings, self._project().feeder_phase_mappings)
+        self.assertEqual(restored.breaker_constraints, tuple())
+        self.assertEqual(project_to_document(restored)["schema_version"], 2)
 
     def test_unknown_schema_fields_are_rejected_instead_of_ignored(self):
         document = project_to_document(self._project())
