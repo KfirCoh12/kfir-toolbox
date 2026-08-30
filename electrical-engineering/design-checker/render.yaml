@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: kfir-toolbox
+    runtime: docker
+    rootDir: electrical-engineering/design-checker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: KFIR_TOOLBOX_REQUIRE_AUTH
+        value: "1"
+      - key: KFIR_TOOLBOX_DATA_DIR
+        value: /data
+      - key: KFIR_TOOLBOX_ALLOWED_EMAILS
+        sync: false
+    disk:
+      name: kfir-toolbox-data
+      mountPath: /data
+      sizeGB: 1
