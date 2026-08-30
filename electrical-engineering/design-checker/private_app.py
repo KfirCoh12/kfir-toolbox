@@ -28,14 +28,17 @@ if email is None:
     st.error("Private hosting could not establish an authenticated user identity.")
     st.stop()
 
-with st.sidebar:
-    if st.button("Log out", use_container_width=True):
-        st.logout()
+
+def logout_page():
+    """End the authenticated Streamlit session when selected from navigation."""
+    st.logout()
+
 
 navigation = st.navigation(
     [
         st.Page("app.py", title="Electrical Design Checker", icon="⚡", default=True),
         st.Page("pages/3_Board_Planner.py", title="Board Planner", icon="⚡"),
+        st.Page(logout_page, title="Log out", icon="🚪"),
     ]
 )
 with persistence_scope_for_email(email):
