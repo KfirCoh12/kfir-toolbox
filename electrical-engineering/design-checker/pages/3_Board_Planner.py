@@ -314,6 +314,18 @@ def calculate_current_field_rollups():
     return graph, plan, calculate_field_rollups(graph, plan, field_materials())
 
 
+def calculate_current_hierarchy():
+    """Build a live recursive board plan using the same exact branch requests as the SLD."""
+    previews, _ = calculate_branch_previews()
+    graph = build_draft_graph(previews)
+    exact_requests = tuple(result.circuit.request for result in previews.values())
+    hierarchy = calculate_board_hierarchy(
+        graph,
+        circuit_request_overrides=exact_requests,
+    )
+    return graph, hierarchy
+
+
 def selected_graph_nodes(selected_node, selected_branch):
     if selected_node in ("source", "incomer", "busbar"):
         return (selected_node,)
@@ -754,6 +766,48 @@ with workspace_right:
                 ):
                     selected_branch.update({"feeder_id": feeder_id.strip(), "sub_board_id": sub_board_id.strip(), "description": sub_description})
                     st.rerun()
+
+                try:
+                    _, preview_hierarchy = calculate_current_hierarchy()
+                    selected_board = next(
+                        (item for item in preview_hierarchy.boards if item.board_id == str(selected_branch["sub_board_id"])),
+                        None,
+                    )
+                    selected_feeder = next(
+                        (item for item in preview_hierarchy.feeder_rollups if item.feeder_circuit_id == str(selected_branch["feeder_id"])),
+                        None,
+                    )
+                    if selected_board is None or selected_board.plan is None:
+                        st.caption("Add calculated downstream circuits to derive this sub-board demand.")
+                    else:
+                        sub_plan = selected_board.plan
+                        downstream_uids = set(child_branch_uids(uid))
+                        downstream_circuits = sum(
+                            1
+                            for branch in branches
+                            if branch["uid"] in downstream_uids and branch.get("kind") == "final"
+                        )
+                        st.markdown('<div class="derived-title">Live sub-board roll-up</div>', unsafe_allow_html=True)
+                        s1, s2, s3 = st.columns(3)
+                        s1.metric("Max phase", f"{sub_plan.phase_balance.max_phase_current_a:.1f} A")
+                        s2.metric(
+                            "Provisional incomer",
+                            f"{sub_plan.incomer_candidate.breaker_rating_a:.0f} A"
+                            if sub_plan.incomer_candidate.breaker_rating_a is not None
+                            else "—",
+                        )
+                        s3.metric("Downstream circuits", str(downstream_circuits))
+                        p1, p2, p3 = st.columns(3)
+                        p1.metric("L1", f"{sub_plan.phase_balance.l1_current_a:.1f} A")
+                        p2.metric("L2", f"{sub_plan.phase_balance.l2_current_a:.1f} A")
+                        p3.metric("L3", f"{sub_plan.phase_balance.l3_current_a:.1f} A")
+                        if selected_feeder is not None:
+                            if selected_feeder.cable_status == "NOT_DECLARED":
+                                st.caption("Feeder cable remains pending until feeder material and installation conditions are explicitly declared.")
+                            elif selected_feeder.cable_status == "NOT_VERIFIED":
+                                st.caption("Feeder cable sizing is not verified for the current downstream load composition.")
+                except (TypeError, ValueError) as exc:
+                    st.warning(str(exc))
 
 branch_results, branch_errors = calculate_branch_previews()
 try:
