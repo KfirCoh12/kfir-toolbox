@@ -1,23 +1,40 @@
-"""Local persistence for the Board Planner working board.
+"""Persistence for the Board Planner working board.
 
-The working copy is intentionally stored outside the repository so Git pulls and
-checkouts do not overwrite it or accidentally commit project-specific board data.
+Local use defaults to storage outside the repository so Git pulls and checkouts do
+not overwrite it or accidentally commit project-specific board data. Hosted
+instances can point the same persistence layer at a private mounted data directory
+through ``KFIR_TOOLBOX_DATA_DIR`` without changing application code.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 _SCHEMA_VERSION = 1
-_DEFAULT_PATH = Path.home() / ".kfir-toolbox" / "board-planner" / "last_board.json"
+_DATA_DIR_ENV = "KFIR_TOOLBOX_DATA_DIR"
+_LOCAL_DATA_ROOT = Path.home() / ".kfir-toolbox"
 _DEFAULT_LINE_TO_LINE_V = 400.0
 _DEFAULT_LINE_TO_NEUTRAL_V = 230.0
 _WIDGET_MINIMUM_SUPPLY = (1.0, 1.0)
 
 
+def toolbox_data_root() -> Path:
+    """Return the private writable data root for local or hosted operation.
+
+    When ``KFIR_TOOLBOX_DATA_DIR`` is unset, existing local installations keep
+    using ``~/.kfir-toolbox``. A hosted deployment can set the variable to a
+    persistent private volume such as ``/var/lib/kfir-toolbox``.
+    """
+    configured = os.environ.get(_DATA_DIR_ENV)
+    if configured is None or not configured.strip():
+        return _LOCAL_DATA_ROOT
+    return Path(configured).expanduser()
+
+
 def board_autosave_path() -> Path:
-    return _DEFAULT_PATH
+    return toolbox_data_root() / "board-planner" / "last_board.json"
 
 
 def _is_widget_minimum_supply(payload: dict) -> bool:
