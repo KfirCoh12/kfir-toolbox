@@ -119,8 +119,25 @@ def _existing_board_payload(target: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _fsync_directory(directory: Path) -> None:
+    """Persist directory metadata where the host platform supports directory fsync."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    try:
+        fd = os.open(directory, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def save_last_board(payload: dict, path: Path | None = None) -> Path:
-    """Atomically persist the current Board Planner working state as JSON."""
+    """Durably and atomically persist the current Board Planner working state as JSON."""
     target = Path(path) if path is not None else board_autosave_path()
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -136,19 +153,29 @@ def save_last_board(payload: dict, path: Path | None = None) -> Path:
 
     document = {"schema_version": _SCHEMA_VERSION, "board": board_payload}
     text = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True)
-
-    with NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=target.parent,
-        prefix=f".{target.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        temp_path = Path(handle.name)
-        handle.write(text)
-        handle.flush()
-    temp_path.replace(target)
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(target)
+        temp_path = None
+        _fsync_directory(target.parent)
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
     return target
 
 
@@ -178,4 +205,5 @@ def clear_last_board(path: Path | None = None) -> None:
     try:
         target.unlink()
     except FileNotFoundError:
-        pass
+        return
+    _fsync_directory(target.parent)
