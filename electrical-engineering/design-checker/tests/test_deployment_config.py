@@ -45,6 +45,10 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn("require_authenticated_user(st)", self.private_app)
         self.assertIn("st.navigation", self.private_app)
 
+    def test_private_entrypoint_exposes_logout_after_authentication(self):
+        self.assertIn('st.button("Log out"', self.private_app)
+        self.assertIn("st.logout()", self.private_app)
+
     def test_private_navigation_is_bound_to_authenticated_user_storage(self):
         self.assertIn("email = require_authenticated_user(st)", self.private_app)
         self.assertIn("with persistence_scope_for_email(email):", self.private_app)
