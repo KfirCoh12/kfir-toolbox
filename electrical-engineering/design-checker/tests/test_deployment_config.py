@@ -8,8 +8,11 @@ class DeploymentConfigTests(unittest.TestCase):
         cls.root = Path(__file__).resolve().parents[1]
         cls.dockerfile = (cls.root / "Dockerfile").read_text(encoding="utf-8")
         cls.dockerignore = (cls.root / ".dockerignore").read_text(encoding="utf-8")
+        cls.gitignore = (cls.root / ".gitignore").read_text(encoding="utf-8")
         cls.persistence = (cls.root / "src" / "board_persistence.py").read_text(encoding="utf-8")
         cls.private_app = (cls.root / "private_app.py").read_text(encoding="utf-8")
+        cls.secrets_example = (cls.root / ".streamlit" / "secrets.toml.example").read_text(encoding="utf-8")
+        cls.private_deployment = (cls.root / "docs" / "PRIVATE_DEPLOYMENT.md").read_text(encoding="utf-8")
 
     def test_container_runs_private_streamlit_entrypoint_on_external_interface(self):
         self.assertIn("streamlit run private_app.py", self.dockerfile)
@@ -38,6 +41,25 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn(".streamlit/secrets.toml", self.dockerignore)
         self.assertIn(".env", self.dockerignore)
         self.assertIn(".kfir-toolbox/", self.dockerignore)
+
+    def test_git_ignores_real_private_credentials(self):
+        self.assertIn(".streamlit/secrets.toml", self.gitignore)
+        self.assertIn(".env", self.gitignore)
+
+    def test_google_oidc_template_contains_only_placeholders(self):
+        self.assertIn("https://accounts.google.com/.well-known/openid-configuration", self.secrets_example)
+        self.assertIn("https://YOUR_HOSTNAME/oauth2callback", self.secrets_example)
+        self.assertIn("REPLACE_WITH_GOOGLE_CLIENT_ID", self.secrets_example)
+        self.assertIn("REPLACE_WITH_GOOGLE_CLIENT_SECRET", self.secrets_example)
+        self.assertNotIn("AIza", self.secrets_example)
+
+    def test_private_deployment_checklist_requires_real_privacy_acceptance_tests(self):
+        self.assertIn("Google", self.private_deployment)
+        self.assertIn("Authorized redirect URIs", self.private_deployment)
+        self.assertIn("KFIR_TOOLBOX_ALLOWED_EMAILS", self.private_deployment)
+        self.assertIn("persistent private volume at `/data`", self.private_deployment)
+        self.assertIn("authenticated but non-allowlisted Google account is denied", self.private_deployment)
+        self.assertIn("should not be described as private until these checks pass", self.private_deployment)
 
     def test_persistence_supports_private_hosted_data_mount(self):
         self.assertIn("KFIR_TOOLBOX_DATA_DIR", self.persistence)
