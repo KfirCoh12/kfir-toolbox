@@ -225,15 +225,40 @@ def project_from_document(document: Any) -> HierarchyEngineeringProject:
     return project
 
 
+def _fsync_directory(directory: Path) -> None:
+    """Persist a completed rename when the host filesystem supports directory fsync.
+
+    POSIX filesystems commonly require the directory entry itself to be fsync'd after
+    an atomic replace for crash durability. Some platforms (notably Windows) do not
+    permit opening/fsyncing directories this way, so unsupported directory syncing is
+    treated as a platform limitation rather than turning an otherwise valid save into
+    a failure.
+    """
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    try:
+        fd = os.open(directory, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def save_hierarchy_project(
     project: HierarchyEngineeringProject,
     path: Path | None = None,
 ) -> Path:
     """Durably and atomically persist hierarchy engineering inputs as UTF-8 JSON.
 
-    The temporary file is fsync'd before the atomic replace so a completed save does
-    not depend only on Python's userspace buffers. Any temporary file left by a failed
-    replace is removed, while the previous target remains untouched.
+    The temporary file is fsync'd before the atomic replace. After replacement, the
+    containing directory is fsync'd where supported so the new directory entry is also
+    crash-durable. Any temporary file left by a failed replace is removed, while the
+    previous target remains untouched.
     """
     target = Path(path) if path is not None else hierarchy_autosave_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -254,6 +279,7 @@ def save_hierarchy_project(
             os.fsync(handle.fileno())
         temp_path.replace(target)
         temp_path = None
+        _fsync_directory(target.parent)
     finally:
         if temp_path is not None:
             try:
