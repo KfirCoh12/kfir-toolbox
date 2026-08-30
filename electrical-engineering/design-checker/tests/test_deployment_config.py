@@ -14,6 +14,8 @@ class DeploymentConfigTests(unittest.TestCase):
         cls.secrets_example = (cls.root / ".streamlit" / "secrets.toml.example").read_text(encoding="utf-8")
         cls.private_deployment = (cls.root / "docs" / "PRIVATE_DEPLOYMENT.md").read_text(encoding="utf-8")
         cls.render_blueprint = (cls.root / "render.yaml").read_text(encoding="utf-8")
+        cls.railway_config = (cls.root / "railway.json").read_text(encoding="utf-8")
+        cls.railway_deployment = (cls.root / "docs" / "RAILWAY_DEPLOYMENT.md").read_text(encoding="utf-8")
 
     def test_container_runs_private_streamlit_entrypoint_on_external_interface(self):
         self.assertIn("streamlit run private_app.py", self.dockerfile)
@@ -71,6 +73,21 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn("sync: false", self.render_blueprint)
         self.assertIn("mountPath: /data", self.render_blueprint)
         self.assertIn("sizeGB: 1", self.render_blueprint)
+
+    def test_railway_config_uses_dockerfile_healthcheck_and_free_safe_restart_policy(self):
+        self.assertIn('"dockerfilePath": "Dockerfile"', self.railway_config)
+        self.assertIn('"healthcheckPath": "/_stcore/health"', self.railway_config)
+        self.assertIn('"restartPolicyType": "ON_FAILURE"', self.railway_config)
+        self.assertIn('"restartPolicyMaxRetries": 10', self.railway_config)
+
+    def test_railway_deployment_requires_persistent_volume_and_documents_permissions(self):
+        self.assertIn("/electrical-engineering/design-checker", self.railway_deployment)
+        self.assertIn("RAILWAY_RUN_UID=0", self.railway_deployment)
+        self.assertIn("attach it to the Toolbox service at", self.railway_deployment)
+        self.assertIn("`/data`", self.railway_deployment)
+        self.assertIn("0.5 GB", self.railway_deployment)
+        self.assertIn("Free plan allowance", self.railway_deployment)
+        self.assertIn("rather than assumed", self.railway_deployment)
 
     def test_persistence_supports_private_hosted_data_mount(self):
         self.assertIn("KFIR_TOOLBOX_DATA_DIR", self.persistence)
