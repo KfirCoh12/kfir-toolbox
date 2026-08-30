@@ -23,6 +23,7 @@ from .hierarchy_planner import (
     FeederPhaseMappingDeclaration,
     calculate_board_hierarchy,
 )
+from .persistence_json import dumps_strict, loads_strict
 
 _SCHEMA_VERSION = 2
 _LEGACY_SCHEMA_VERSION = 1
@@ -286,7 +287,12 @@ def save_hierarchy_project(
     """
     target = Path(path) if path is not None else hierarchy_autosave_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(project_to_document(project), ensure_ascii=False, indent=2, sort_keys=True)
+    text = dumps_strict(
+        project_to_document(project),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
     temp_path: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -319,7 +325,7 @@ def load_hierarchy_project(path: Path | None = None) -> HierarchyEngineeringProj
     if not target.exists():
         return None
     try:
-        document = json.loads(target.read_text(encoding="utf-8"))
+        document = loads_strict(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Could not read saved hierarchy state: {exc}") from exc
     return project_from_document(document)
