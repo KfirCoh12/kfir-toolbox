@@ -28,18 +28,18 @@ if email is None:
     st.error("Private hosting could not establish an authenticated user identity.")
     st.stop()
 
-
-def logout_page():
-    """End the authenticated Streamlit session when selected from navigation."""
-    st.logout()
-
-
 navigation = st.navigation(
     [
         st.Page("app.py", title="Electrical Design Checker", icon="⚡", default=True),
         st.Page("pages/3_Board_Planner.py", title="Board Planner", icon="⚡"),
-        st.Page(logout_page, title="Log out", icon="🚪"),
-    ]
+    ],
+    expanded=True,
 )
+
+# The entrypoint is Streamlit's shared frame and reruns for every navigation page.
+# Render authentication controls after st.navigation so they remain below the
+# navigation menu on every page instead of being hidden by the navigation widget.
+st.sidebar.button("Log out", on_click=st.logout, use_container_width=True, key="private_logout")
+
 with persistence_scope_for_email(email):
     navigation.run()
