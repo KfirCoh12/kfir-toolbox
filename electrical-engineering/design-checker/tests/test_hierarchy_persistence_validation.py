@@ -1,10 +1,10 @@
-import copy
 import tempfile
 import unittest
 from pathlib import Path
 
 from src.board_graph import add_radial_circuit, add_sub_board_feeder, make_radial_board_graph
 from src.circuit_engine import CircuitDesignRequest
+from src.hierarchy_constraints import BreakerRatingConstraint
 from src.hierarchy_persistence import (
     HierarchyEngineeringProject,
     project_from_document,
@@ -104,6 +104,38 @@ class HierarchyPersistenceValidationTests(unittest.TestCase):
             }
         ]
         with self.assertRaisesRegex(ValueError, "unknown sub-board feeder"):
+            project_from_document(document)
+
+    def test_unknown_breaker_constraint_is_rejected_before_persistence(self):
+        project = HierarchyEngineeringProject(
+            graph=self._graph(),
+            breaker_constraints=(
+                BreakerRatingConstraint(
+                    node_id="missing:device",
+                    rating_a=32.0,
+                    basis_note="Recorded breaker rating",
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "unknown node"):
+            project_to_document(project)
+
+    def test_duplicate_breaker_constraints_are_rejected_when_loading_document(self):
+        project = HierarchyEngineeringProject(
+            graph=self._graph(),
+            breaker_constraints=(
+                BreakerRatingConstraint(
+                    node_id="C-01:device",
+                    rating_a=32.0,
+                    basis_note="Recorded breaker rating",
+                ),
+            ),
+        )
+        document = project_to_document(project)
+        document["project"]["breaker_constraints"].append(
+            dict(document["project"]["breaker_constraints"][0])
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate breaker constraint"):
             project_from_document(document)
 
     def test_failed_save_does_not_replace_existing_valid_file(self):
