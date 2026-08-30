@@ -7,6 +7,7 @@ class DeploymentConfigTests(unittest.TestCase):
     def setUpClass(cls):
         cls.root = Path(__file__).resolve().parents[1]
         cls.dockerfile = (cls.root / "Dockerfile").read_text(encoding="utf-8")
+        cls.docker_entrypoint = (cls.root / "docker-entrypoint.sh").read_text(encoding="utf-8")
         cls.dockerignore = (cls.root / ".dockerignore").read_text(encoding="utf-8")
         cls.gitignore = (cls.root / ".gitignore").read_text(encoding="utf-8")
         cls.persistence = (cls.root / "src" / "board_persistence.py").read_text(encoding="utf-8")
@@ -18,15 +19,25 @@ class DeploymentConfigTests(unittest.TestCase):
         cls.railway_deployment = (cls.root / "docs" / "RAILWAY_DEPLOYMENT.md").read_text(encoding="utf-8")
 
     def test_container_runs_private_streamlit_entrypoint_on_external_interface(self):
-        self.assertIn("streamlit run private_app.py", self.dockerfile)
-        self.assertIn("--server.address=0.0.0.0", self.dockerfile)
-        self.assertIn("${PORT:-8501}", self.dockerfile)
+        self.assertIn('CMD ["/app/docker-entrypoint.sh"]', self.dockerfile)
+        self.assertIn("streamlit run private_app.py", self.docker_entrypoint)
+        self.assertIn("--server.address=0.0.0.0", self.docker_entrypoint)
+        self.assertIn('${PORT:-8501}', self.docker_entrypoint)
 
     def test_container_defaults_to_private_auth_and_persistent_data_dir(self):
         self.assertIn("KFIR_TOOLBOX_REQUIRE_AUTH=1", self.dockerfile)
         self.assertIn("KFIR_TOOLBOX_DATA_DIR=/data", self.dockerfile)
         self.assertIn("USER toolbox", self.dockerfile)
         self.assertIn("/_stcore/health", self.dockerfile)
+
+    def test_runtime_entrypoint_materializes_oidc_secrets_from_environment(self):
+        self.assertIn("KFIR_TOOLBOX_GOOGLE_CLIENT_ID", self.docker_entrypoint)
+        self.assertIn("KFIR_TOOLBOX_GOOGLE_CLIENT_SECRET", self.docker_entrypoint)
+        self.assertIn("KFIR_TOOLBOX_COOKIE_SECRET", self.docker_entrypoint)
+        self.assertIn("RAILWAY_PUBLIC_DOMAIN", self.docker_entrypoint)
+        self.assertIn("/oauth2callback", self.docker_entrypoint)
+        self.assertIn("https://accounts.google.com/.well-known/openid-configuration", self.docker_entrypoint)
+        self.assertIn('/app/.streamlit/secrets.toml', self.docker_entrypoint)
 
     def test_private_entrypoint_fails_closed_without_explicit_allowlist(self):
         self.assertIn("if not authentication_required():", self.private_app)
