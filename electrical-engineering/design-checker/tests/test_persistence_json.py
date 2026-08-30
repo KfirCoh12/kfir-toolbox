@@ -19,6 +19,15 @@ class StrictPersistenceJsonTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Non-finite numeric token"):
                     loads_strict(f'{{"value": {token}}}')
 
+    def test_decoder_rejects_duplicate_object_keys_at_any_depth(self):
+        for text in (
+            '{"schema_version": 1, "schema_version": 2}',
+            '{"board": {"line_to_line_voltage_v": 400, "line_to_line_voltage_v": 415}}',
+        ):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "Duplicate object key"):
+                    loads_strict(text)
+
     def test_board_save_rejects_non_finite_engineering_state_without_overwriting_existing_save(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "last_board.json"
@@ -42,6 +51,16 @@ class StrictPersistenceJsonTests(unittest.TestCase):
             path = Path(folder) / "last_board.json"
             path.write_text(
                 '{"schema_version": 1, "board": {"line_to_line_voltage_v": NaN, "branches": []}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Could not read saved Board Planner state"):
+                load_last_board(path)
+
+    def test_board_load_rejects_duplicate_engineering_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "last_board.json"
+            path.write_text(
+                '{"schema_version": 1, "board": {"line_to_line_voltage_v": 400, "line_to_line_voltage_v": 415, "branches": []}}',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "Could not read saved Board Planner state"):
