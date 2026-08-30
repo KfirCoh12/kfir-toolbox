@@ -133,6 +133,17 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('Sub-board phase demand now propagates recursively', self.text)
         self.assertIn('without flattening child circuits', self.text)
 
+    def test_sub_board_properties_show_live_recursive_rollup(self):
+        self.assertIn('def calculate_current_hierarchy():', self.text)
+        self.assertIn('Live sub-board roll-up', self.text)
+        self.assertIn('s1.metric("Max phase"', self.text)
+        self.assertIn('"Provisional incomer"', self.text)
+        self.assertIn('s3.metric("Downstream circuits"', self.text)
+        self.assertIn('p1.metric("L1"', self.text)
+        self.assertIn('p2.metric("L2"', self.text)
+        self.assertIn('p3.metric("L3"', self.text)
+        self.assertIn('Feeder cable remains pending until feeder material and installation conditions are explicitly declared.', self.text)
+
     def test_schedule_is_generated_secondary_view(self):
         self.assertIn('with st.expander("Generated circuit schedule")', self.text)
         self.assertIn("live_plan.schedule_rows", self.text)
