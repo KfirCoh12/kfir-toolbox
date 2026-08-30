@@ -1,13 +1,18 @@
 """Protection topology derived from the electrical board graph.
 
-This module provides the structural inputs needed by later protection-coordination
-logic. It derives nearest upstream/downstream relationships and complete protection
-chains strictly from graph ancestry. It does not evaluate selectivity, discrimination,
-backup protection, fault current, trip curves, or standards compliance.
+This module provides structural inputs for protection-coordination logic. It derives
+nearest upstream/downstream relationships and complete protection chains strictly from
+graph ancestry. It can also attach conservative coordination status to each adjacent
+protective-device pair.
+
+Observed breaker ratings are topology data only. Rating order is never treated as
+proof of selectivity, discrimination, backup protection, breaking capacity, fault
+protection, trip-curve performance, or standards compliance.
 """
 from dataclasses import dataclass
 
 from .board_graph import BoardElectricalGraph, ElectricalNode, validate_board_graph
+from .protection import ProtectionCoordinationStatus, coordination_status
 
 
 @dataclass(frozen=True)
@@ -17,6 +22,26 @@ class ProtectionRelationship:
     downstream_circuit_id: str | None
     upstream_rating_a: float | None = None
     downstream_rating_a: float | None = None
+
+
+@dataclass(frozen=True)
+class ProtectionCoordinationAssessment:
+    """One adjacent protective-device pair with explicit verification status.
+
+    The two ratings are observations from the hierarchy. They may be useful planning
+    context, but their relative magnitude does not change ``coordination`` status.
+    """
+
+    relationship: ProtectionRelationship
+    coordination: ProtectionCoordinationStatus
+
+    @property
+    def upstream_rating_a(self) -> float | None:
+        return self.relationship.upstream_rating_a
+
+    @property
+    def downstream_rating_a(self) -> float | None:
+        return self.relationship.downstream_rating_a
 
 
 @dataclass(frozen=True)
@@ -48,7 +73,6 @@ class ProtectionChain:
     @property
     def ratings_complete(self) -> bool:
         return all(device.rating_a is not None for device in self.devices)
-
 
 
 def _is_protective(node: ElectricalNode) -> bool:
@@ -88,6 +112,32 @@ def protection_relationships(
             downstream_rating_a=node.rating_a,
         ))
     return tuple(relationships)
+
+
+def protection_coordination_assessments(
+    graph: BoardElectricalGraph,
+    *,
+    protection_check_requested: bool = False,
+    selectivity_check_requested: bool = False,
+) -> tuple[ProtectionCoordinationAssessment, ...]:
+    """Attach conservative verification status to each adjacent protection pair.
+
+    A request for protection or selectivity checking cannot produce ``VERIFIED`` from
+    topology or rating order. Without real fault/device/manufacturer evidence the
+    shared protection engine returns ``INSUFFICIENT DATA``. Unrequested checks remain
+    ``NOT CHECKED``.
+    """
+    status = coordination_status(
+        protection_check_requested=protection_check_requested,
+        selectivity_check_requested=selectivity_check_requested,
+    )
+    return tuple(
+        ProtectionCoordinationAssessment(
+            relationship=relationship,
+            coordination=status,
+        )
+        for relationship in protection_relationships(graph)
+    )
 
 
 def protection_chain_for_node(
