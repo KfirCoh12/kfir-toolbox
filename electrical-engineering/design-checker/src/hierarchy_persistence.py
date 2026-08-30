@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -72,9 +72,29 @@ def _strict_dataclass(cls, raw: Any, label: str, *, tuple_fields: tuple[str, ...
         raise ValueError(f"{label} is missing required fields or has invalid structure: {exc}") from exc
 
 
+def _without_calculated_node_results(node: ElectricalNode) -> ElectricalNode:
+    """Return only the source-of-truth portion of an electrical graph node.
+
+    Hierarchy enrichment deliberately writes calculation outputs back onto the shared
+    graph so renderers can consume one model. Those values are derived, however, and
+    must never become persisted engineering inputs. Clearing them here also sanitizes
+    older schema-compatible saves that may already contain stale enrichment values.
+    """
+    return replace(
+        node,
+        rating_a=None,
+        cable_mm2=None,
+        cable_runs=None,
+        assigned_phase=None,
+        scope_status=None,
+        issue_codes=tuple(),
+    )
+
+
 def _node_to_dict(node: ElectricalNode) -> dict[str, Any]:
-    data = asdict(node)
-    data["issue_codes"] = list(node.issue_codes)
+    source_node = _without_calculated_node_results(node)
+    data = asdict(source_node)
+    data["issue_codes"] = list(source_node.issue_codes)
     return data
 
 
@@ -108,11 +128,13 @@ def _graph_from_dict(raw: Any) -> BoardElectricalGraph:
             f"project.graph is missing required fields: {', '.join(sorted(missing))}"
         )
     nodes = tuple(
-        _strict_dataclass(
-            ElectricalNode,
-            node,
-            f"project.graph.nodes[{index}]",
-            tuple_fields=("issue_codes",),
+        _without_calculated_node_results(
+            _strict_dataclass(
+                ElectricalNode,
+                node,
+                f"project.graph.nodes[{index}]",
+                tuple_fields=("issue_codes",),
+            )
         )
         for index, node in enumerate(_require_list(data["nodes"], "project.graph.nodes"))
     )
@@ -167,7 +189,9 @@ def project_from_document(document: Any) -> HierarchyEngineeringProject:
 
     Version-1 documents are migrated explicitly by treating breaker constraints as an
     empty tuple because that schema predates persistence of those source inputs. New
-    documents always use version 2.
+    documents always use version 2. Graph calculation-enrichment fields are cleared
+    while loading both supported versions so previously saved derived results cannot
+    become engineering inputs.
     """
     root = _require_object(document, "saved hierarchy")
     unknown_root = set(root) - {"schema_version", "project"}
