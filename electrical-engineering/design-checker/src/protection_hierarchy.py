@@ -2,17 +2,27 @@
 
 This module provides structural inputs for protection-coordination logic. It derives
 nearest upstream/downstream relationships and complete protection chains strictly from
-graph ancestry. It can also attach conservative coordination status to each adjacent
-protective-device pair.
+graph ancestry. It can also attach conservative coordination status and structured
+evidence readiness to each adjacent protective-device pair.
 
 Observed breaker ratings are topology data only. Rating order is never treated as
 proof of selectivity, discrimination, backup protection, breaking capacity, fault
 protection, trip-curve performance, or standards compliance.
 """
 from dataclasses import dataclass
+from math import isclose
+from typing import Mapping
 
 from .board_graph import BoardElectricalGraph, ElectricalNode, validate_board_graph
-from .protection import ProtectionCoordinationStatus, coordination_status
+from .protection import ProtectionCoordinationStatus
+from .protection_evidence import (
+    CoordinationEvidence,
+    EvidenceReadiness,
+    conservative_status_from_evidence,
+    evidence_readiness,
+)
+
+ProtectionPairKey = tuple[str, str]
 
 
 @dataclass(frozen=True)
@@ -23,16 +33,24 @@ class ProtectionRelationship:
     upstream_rating_a: float | None = None
     downstream_rating_a: float | None = None
 
+    @property
+    def pair_key(self) -> ProtectionPairKey:
+        return (self.upstream_node_id, self.downstream_node_id)
+
 
 @dataclass(frozen=True)
 class ProtectionCoordinationAssessment:
-    """One adjacent protective-device pair with explicit verification status.
+    """One adjacent protective-device pair with evidence-aware conservative status.
 
     The two ratings are observations from the hierarchy. They may be useful planning
     context, but their relative magnitude does not change ``coordination`` status.
+    ``readiness`` describes only whether expected evidence categories are present; it
+    is never itself a protection or selectivity verification result.
     """
 
     relationship: ProtectionRelationship
+    evidence: CoordinationEvidence
+    readiness: EvidenceReadiness
     coordination: ProtectionCoordinationStatus
 
     @property
@@ -42,6 +60,14 @@ class ProtectionCoordinationAssessment:
     @property
     def downstream_rating_a(self) -> float | None:
         return self.relationship.downstream_rating_a
+
+    @property
+    def missing_protection_evidence(self) -> tuple[str, ...]:
+        return self.readiness.missing_protection_evidence
+
+    @property
+    def missing_selectivity_evidence(self) -> tuple[str, ...]:
+        return self.readiness.missing_selectivity_evidence
 
 
 @dataclass(frozen=True)
@@ -89,6 +115,37 @@ def _chain_device(node: ElectricalNode) -> ProtectionChainDevice:
     )
 
 
+def _assert_evidence_rating_consistency(
+    relationship: ProtectionRelationship,
+    evidence: CoordinationEvidence,
+) -> None:
+    """Fail if declared evidence contradicts an already-observed topology rating.
+
+    A graph rating is not promoted into evidence automatically. This guard only
+    prevents two explicit backend inputs from silently disagreeing.
+    """
+    comparisons = (
+        (
+            "upstream",
+            relationship.upstream_rating_a,
+            evidence.upstream_device.rating_a if evidence.upstream_device else None,
+        ),
+        (
+            "downstream",
+            relationship.downstream_rating_a,
+            evidence.downstream_device.rating_a if evidence.downstream_device else None,
+        ),
+    )
+    for side, topology_rating, evidence_rating in comparisons:
+        if topology_rating is None or evidence_rating is None:
+            continue
+        if not isclose(float(topology_rating), float(evidence_rating), rel_tol=0.0, abs_tol=1e-9):
+            raise ValueError(
+                f"{side} evidence rating for {relationship.upstream_node_id} -> "
+                f"{relationship.downstream_node_id} disagrees with topology rating"
+            )
+
+
 def protection_relationships(
     graph: BoardElectricalGraph,
 ) -> tuple[ProtectionRelationship, ...]:
@@ -119,25 +176,43 @@ def protection_coordination_assessments(
     *,
     protection_check_requested: bool = False,
     selectivity_check_requested: bool = False,
+    evidence_by_pair: Mapping[ProtectionPairKey, CoordinationEvidence] | None = None,
 ) -> tuple[ProtectionCoordinationAssessment, ...]:
-    """Attach conservative verification status to each adjacent protection pair.
+    """Attach evidence-aware conservative status to each adjacent protection pair.
 
-    A request for protection or selectivity checking cannot produce ``VERIFIED`` from
-    topology or rating order. Without real fault/device/manufacturer evidence the
-    shared protection engine returns ``INSUFFICIENT DATA``. Unrequested checks remain
-    ``NOT CHECKED``.
+    Evidence is keyed by ``(upstream_node_id, downstream_node_id)`` so each pair can
+    carry independent fault/device/cable/manufacturer inputs. Missing pairs receive an
+    empty evidence bundle and therefore explicitly report what they still need.
+
+    Supplying complete evidence only makes a pair ready for a future engineering
+    check. It cannot produce ``VERIFIED`` here. Rating order is never evidence of
+    selectivity, and graph ratings are never silently promoted into evidence.
     """
-    status = coordination_status(
-        protection_check_requested=protection_check_requested,
-        selectivity_check_requested=selectivity_check_requested,
-    )
-    return tuple(
-        ProtectionCoordinationAssessment(
-            relationship=relationship,
-            coordination=status,
+    relationships = protection_relationships(graph)
+    supplied = dict(evidence_by_pair or {})
+    known_keys = {relationship.pair_key for relationship in relationships}
+    unknown_keys = sorted(set(supplied) - known_keys)
+    if unknown_keys:
+        formatted = ", ".join(f"{upstream} -> {downstream}" for upstream, downstream in unknown_keys)
+        raise ValueError(f"evidence supplied for unknown protection relationship(s): {formatted}")
+
+    assessments: list[ProtectionCoordinationAssessment] = []
+    for relationship in relationships:
+        evidence = supplied.get(relationship.pair_key, CoordinationEvidence())
+        _assert_evidence_rating_consistency(relationship, evidence)
+        readiness = evidence_readiness(evidence)
+        coordination = conservative_status_from_evidence(
+            evidence,
+            protection_check_requested=protection_check_requested,
+            selectivity_check_requested=selectivity_check_requested,
         )
-        for relationship in protection_relationships(graph)
-    )
+        assessments.append(ProtectionCoordinationAssessment(
+            relationship=relationship,
+            evidence=evidence,
+            readiness=readiness,
+            coordination=coordination,
+        ))
+    return tuple(assessments)
 
 
 def protection_chain_for_node(
