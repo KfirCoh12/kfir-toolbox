@@ -37,7 +37,7 @@ board_page = st.Page("pages/3_Board_Planner.py", title="Board Planner", icon="�
 navigation = st.navigation([checker_page, board_page], position="hidden")
 
 with st.sidebar:
-    st.caption("Hosted auth entrypoint · diagnostic")
+    st.caption("Hosted auth entrypoint · diagnostic 2")
     st.page_link(checker_page, label="Electrical Design Checker", icon="⚡")
     st.page_link(board_page, label="Board Planner", icon="⚡")
     st.divider()
