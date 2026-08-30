@@ -68,6 +68,20 @@ class HierarchyPersistenceStrictJsonTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Non-finite numeric token"):
                 load_hierarchy_project(path)
 
+    def test_load_rejects_duplicate_engineering_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hierarchy.json"
+            document = project_to_document(self._project())
+            text = json.dumps(document).replace(
+                '"load_value": 18.0',
+                '"load_value": 18.0, "load_value": 20.0',
+            )
+            self.assertIn('"load_value": 18.0, "load_value": 20.0', text)
+            path.write_text(text, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "Duplicate object key"):
+                load_hierarchy_project(path)
+
 
 if __name__ == "__main__":
     unittest.main()
