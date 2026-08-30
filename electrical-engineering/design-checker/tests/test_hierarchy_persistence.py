@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.board_graph import add_radial_circuit, add_sub_board_feeder, make_radial_board_graph
 from src.circuit_engine import CircuitDesignRequest
@@ -115,6 +116,27 @@ class HierarchyPersistenceTests(unittest.TestCase):
                 assess_breaker_constraints(project.graph, before, project.breaker_constraints),
                 assess_breaker_constraints(restored.graph, after, restored.breaker_constraints),
             )
+
+    def test_save_flushes_temporary_file_to_os_before_replace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hierarchy.json"
+            with patch("src.hierarchy_persistence.os.fsync") as fsync:
+                save_hierarchy_project(self._project(), path)
+            fsync.assert_called_once()
+            self.assertEqual(load_hierarchy_project(path), self._project())
+
+    def test_failed_replace_preserves_existing_target_and_removes_temporary_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            path = directory_path / "hierarchy.json"
+            path.write_text("existing-valid-save", encoding="utf-8")
+
+            with patch.object(Path, "replace", side_effect=OSError("simulated replace failure")):
+                with self.assertRaisesRegex(OSError, "simulated replace failure"):
+                    save_hierarchy_project(self._project(), path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "existing-valid-save")
+            self.assertEqual(list(directory_path.glob(".hierarchy.json.*.tmp")), [])
 
     def test_saved_document_contains_inputs_not_calculated_results(self):
         document = project_to_document(self._project())
