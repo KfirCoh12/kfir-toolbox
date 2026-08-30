@@ -9,7 +9,9 @@ from src.board_persistence import (
     board_autosave_path,
     clear_last_board,
     load_last_board,
+    persistence_scope_for_email,
     save_last_board,
+    storage_key_for_email,
     toolbox_data_root,
 )
 
@@ -69,6 +71,52 @@ class BoardPersistenceTests(unittest.TestCase):
     def test_blank_hosted_data_directory_keeps_local_default(self):
         with patch.dict(os.environ, {"KFIR_TOOLBOX_DATA_DIR": "   "}):
             self.assertEqual(toolbox_data_root(), Path.home() / ".kfir-toolbox")
+
+    def test_authenticated_users_get_distinct_opaque_hosted_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.dict(os.environ, {"KFIR_TOOLBOX_DATA_DIR": folder}):
+                with persistence_scope_for_email("One@Example.com"):
+                    first = board_autosave_path()
+                with persistence_scope_for_email("two@example.com"):
+                    second = board_autosave_path()
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.parent.parent.parent, Path(folder) / "users")
+        self.assertNotIn("one@example.com", str(first).lower())
+        self.assertNotIn("two@example.com", str(second).lower())
+
+    def test_authenticated_user_scope_is_deterministic_and_normalized(self):
+        self.assertEqual(
+            storage_key_for_email(" Owner@Example.com "),
+            storage_key_for_email("owner@example.com"),
+        )
+
+    def test_authenticated_users_cannot_overwrite_each_others_autosave(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.dict(os.environ, {"KFIR_TOOLBOX_DATA_DIR": folder}):
+                with persistence_scope_for_email("one@example.com"):
+                    save_last_board({"board_id": "DB-ONE", "branches": []})
+                with persistence_scope_for_email("two@example.com"):
+                    save_last_board({"board_id": "DB-TWO", "branches": []})
+
+                with persistence_scope_for_email("one@example.com"):
+                    self.assertEqual(load_last_board()["board_id"], "DB-ONE")
+                with persistence_scope_for_email("two@example.com"):
+                    self.assertEqual(load_last_board()["board_id"], "DB-TWO")
+
+    def test_user_scope_does_not_leak_after_context_exit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.dict(os.environ, {"KFIR_TOOLBOX_DATA_DIR": folder}):
+                with persistence_scope_for_email("owner@example.com"):
+                    self.assertIn("users", board_autosave_path().parts)
+                self.assertEqual(
+                    board_autosave_path(),
+                    Path(folder) / "board-planner" / "last_board.json",
+                )
+
+    def test_blank_authenticated_email_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Authenticated email is required"):
+            storage_key_for_email("   ")
 
     def test_legacy_widget_minimum_supply_is_repaired_on_load(self):
         payload = {
