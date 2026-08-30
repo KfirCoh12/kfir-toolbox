@@ -21,6 +21,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from .persistence_json import dumps_strict, loads_strict
+
 _SCHEMA_VERSION = 1
 _DATA_DIR_ENV = "KFIR_TOOLBOX_DATA_DIR"
 _LOCAL_DATA_ROOT = Path.home() / ".kfir-toolbox"
@@ -110,8 +112,8 @@ def _existing_board_payload(target: Path) -> dict | None:
     if not target.exists():
         return None
     try:
-        document = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        document = loads_strict(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return None
     if not isinstance(document, dict) or document.get("schema_version") != _SCHEMA_VERSION:
         return None
@@ -152,7 +154,7 @@ def save_last_board(payload: dict, path: Path | None = None) -> Path:
                 board_payload["line_to_neutral_voltage_v"] = previous_vln
 
     document = {"schema_version": _SCHEMA_VERSION, "board": board_payload}
-    text = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True)
+    text = dumps_strict(document, ensure_ascii=False, indent=2, sort_keys=True)
     temp_path: Path | None = None
     try:
         with NamedTemporaryFile(
@@ -185,8 +187,8 @@ def load_last_board(path: Path | None = None) -> dict | None:
     if not target.exists():
         return None
     try:
-        document = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        document = loads_strict(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
         raise ValueError(f"Could not read saved Board Planner state: {exc}") from exc
 
     if not isinstance(document, dict):
