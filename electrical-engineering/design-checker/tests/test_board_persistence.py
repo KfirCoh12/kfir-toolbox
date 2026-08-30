@@ -169,6 +169,35 @@ class BoardPersistenceTests(unittest.TestCase):
             self.assertEqual(loaded["line_to_line_voltage_v"], 480.0)
             self.assertEqual(loaded["line_to_neutral_voltage_v"], 277.0)
 
+    def test_save_flushes_file_and_directory_metadata(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "last_board.json"
+            real_fsync = os.fsync
+            calls = []
+
+            def recording_fsync(fd):
+                calls.append(fd)
+                return real_fsync(fd)
+
+            with patch("src.board_persistence.os.fsync", side_effect=recording_fsync):
+                save_last_board({"branches": []}, path)
+
+            self.assertGreaterEqual(len(calls), 2)
+            self.assertEqual(load_last_board(path), {"branches": []})
+
+    def test_failed_replace_preserves_existing_save_and_cleans_temp_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "last_board.json"
+            original = {"schema_version": 1, "board": {"board_id": "DB-OLD", "branches": []}}
+            path.write_text(json.dumps(original), encoding="utf-8")
+
+            with patch("src.board_persistence.Path.replace", side_effect=OSError("replace failed")):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    save_last_board({"board_id": "DB-NEW", "branches": []}, path)
+
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), original)
+            self.assertEqual(list(Path(folder).glob(".last_board.json.*.tmp")), [])
+
     def test_clear_is_idempotent(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "last_board.json"
