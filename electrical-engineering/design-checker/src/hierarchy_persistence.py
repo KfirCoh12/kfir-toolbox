@@ -9,6 +9,7 @@ avoiding stale engineering results.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -228,22 +229,37 @@ def save_hierarchy_project(
     project: HierarchyEngineeringProject,
     path: Path | None = None,
 ) -> Path:
-    """Atomically persist hierarchy engineering inputs as UTF-8 JSON."""
+    """Durably and atomically persist hierarchy engineering inputs as UTF-8 JSON.
+
+    The temporary file is fsync'd before the atomic replace so a completed save does
+    not depend only on Python's userspace buffers. Any temporary file left by a failed
+    replace is removed, while the previous target remains untouched.
+    """
     target = Path(path) if path is not None else hierarchy_autosave_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(project_to_document(project), ensure_ascii=False, indent=2, sort_keys=True)
-    with NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=target.parent,
-        prefix=f".{target.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        temp_path = Path(handle.name)
-        handle.write(text)
-        handle.flush()
-    temp_path.replace(target)
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temp_path.replace(target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
     return target
 
 
