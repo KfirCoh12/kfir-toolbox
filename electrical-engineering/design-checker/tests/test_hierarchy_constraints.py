@@ -138,6 +138,72 @@ class HierarchyConstraintTests(unittest.TestCase):
                 (BreakerRatingConstraint("busbar", 16.0, "Not a breaker"),),
             )
 
+    def test_hierarchy_with_different_final_circuits_is_rejected_even_when_board_ids_match(self):
+        graph = self._graph()
+        stale_graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        stale_graph = add_sub_board_feeder(
+            stale_graph,
+            feeder_id="DBF-01",
+            sub_board_id="DB-02",
+            description="Sub-board",
+        )
+        stale_graph = add_radial_circuit(
+            stale_graph,
+            circuit_id="C-OTHER",
+            description="Different root load",
+            load_kw=18.0,
+            phase="three",
+        )
+        stale_graph = add_radial_circuit(
+            stale_graph,
+            circuit_id="C-CHILD",
+            description="Child load",
+            load_kw=9.0,
+            phase="three",
+            parent_busbar_id="DBF-01:DB-02:busbar",
+        )
+        stale_hierarchy = calculate_board_hierarchy(stale_graph)
+
+        with self.assertRaisesRegex(ValueError, "final-circuit topology"):
+            assess_breaker_constraints(
+                graph,
+                stale_hierarchy,
+                (BreakerRatingConstraint("incomer", 63.0, "Existing main breaker"),),
+            )
+
+    def test_hierarchy_with_different_feeder_topology_is_rejected_even_when_board_ids_match(self):
+        graph = self._graph()
+        stale_graph = make_radial_board_graph(board_id="DB-01", description="Main board")
+        stale_graph = add_sub_board_feeder(
+            stale_graph,
+            feeder_id="DBF-OTHER",
+            sub_board_id="DB-02",
+            description="Sub-board",
+        )
+        stale_graph = add_radial_circuit(
+            stale_graph,
+            circuit_id="C-ROOT",
+            description="Root load",
+            load_kw=18.0,
+            phase="three",
+        )
+        stale_graph = add_radial_circuit(
+            stale_graph,
+            circuit_id="C-CHILD",
+            description="Child load",
+            load_kw=9.0,
+            phase="three",
+            parent_busbar_id="DBF-OTHER:DB-02:busbar",
+        )
+        stale_hierarchy = calculate_board_hierarchy(stale_graph)
+
+        with self.assertRaisesRegex(ValueError, "sub-board feeder topology"):
+            assess_breaker_constraints(
+                graph,
+                stale_hierarchy,
+                (BreakerRatingConstraint("incomer", 63.0, "Existing main breaker"),),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
