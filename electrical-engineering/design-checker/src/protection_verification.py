@@ -1,9 +1,8 @@
-"""Strict contracts for future protection/selectivity verification engines.
+"""Strict contracts for protection/selectivity verification engines.
 
-This module deliberately does not implement engineering verification. It defines the
-boundary a future verifier must cross before any backend path may claim ``VERIFIED``.
-A verified result must identify the verifier, the exact protection pair, and traceable
-provenance. Planning, topology, evidence-readiness, or rating order are not verifiers.
+A verified or explicitly negative engineering verdict must identify the verifier, the
+exact protection pair, and traceable provenance. Planning, topology,
+evidence-readiness, or rating order are not verifiers.
 """
 from dataclasses import dataclass
 from typing import Literal
@@ -71,6 +70,28 @@ def _nonblank(value: str) -> bool:
     return bool(value.strip())
 
 
+def _validate_decisive_provenance(
+    provenance: VerificationProvenance,
+    *,
+    basis: str,
+) -> None:
+    if not _nonblank(provenance.upstream_node_id) or not _nonblank(provenance.downstream_node_id):
+        raise ValueError("decisive result requires upstream and downstream protection node IDs")
+    if provenance.upstream_node_id == provenance.downstream_node_id:
+        raise ValueError("decisive result requires two distinct protection nodes")
+    if not _nonblank(provenance.verifier.name) or not _nonblank(provenance.verifier.version):
+        raise ValueError("decisive result requires verifier name and version")
+    if not provenance.evidence_sources:
+        raise ValueError("decisive result requires at least one traceable evidence source")
+    for source in provenance.evidence_sources:
+        if not _nonblank(source.reference):
+            raise ValueError("decisive result evidence sources require nonblank references")
+    if not _nonblank(provenance.rule_basis_ref):
+        raise ValueError("decisive result requires a traceable rule basis reference")
+    if not _nonblank(basis):
+        raise ValueError("decisive result requires a nonblank engineering basis")
+
+
 def make_unverified_result(
     *,
     check: VerificationCheck,
@@ -78,7 +99,7 @@ def make_unverified_result(
     missing_evidence: tuple[str, ...] = (),
     basis: str,
 ) -> ProtectionVerificationResult:
-    """Construct a result that cannot claim engineering verification."""
+    """Construct a result where no engineering verdict has been established."""
     return ProtectionVerificationResult(
         check=check,
         status="INSUFFICIENT DATA" if requested else "NOT CHECKED",
@@ -94,31 +115,28 @@ def make_verified_result(
     provenance: VerificationProvenance,
     basis: str,
 ) -> ProtectionVerificationResult:
-    """Construct ``VERIFIED`` only when strict traceability is explicitly supplied.
-
-    This constructor validates provenance shape only. It does not decide whether an
-    engineering rule passes. A future dedicated verifier must perform that check and
-    may call this function only after doing so.
-    """
-    if not _nonblank(provenance.upstream_node_id) or not _nonblank(provenance.downstream_node_id):
-        raise ValueError("verified result requires upstream and downstream protection node IDs")
-    if provenance.upstream_node_id == provenance.downstream_node_id:
-        raise ValueError("verified result requires two distinct protection nodes")
-    if not _nonblank(provenance.verifier.name) or not _nonblank(provenance.verifier.version):
-        raise ValueError("verified result requires verifier name and version")
-    if not provenance.evidence_sources:
-        raise ValueError("verified result requires at least one traceable evidence source")
-    for source in provenance.evidence_sources:
-        if not _nonblank(source.reference):
-            raise ValueError("verified result evidence sources require nonblank references")
-    if not _nonblank(provenance.rule_basis_ref):
-        raise ValueError("verified result requires a traceable rule basis reference")
-    if not _nonblank(basis):
-        raise ValueError("verified result requires a nonblank engineering basis")
-
+    """Construct ``VERIFIED`` after a dedicated verifier establishes a passing result."""
+    _validate_decisive_provenance(provenance, basis=basis)
     return ProtectionVerificationResult(
         check=check,
         status="VERIFIED",
+        provenance=provenance,
+        basis=basis,
+        missing_evidence=(),
+    )
+
+
+def make_not_verified_result(
+    *,
+    check: VerificationCheck,
+    provenance: VerificationProvenance,
+    basis: str,
+) -> ProtectionVerificationResult:
+    """Construct an explicit failing verdict with the same traceability as VERIFIED."""
+    _validate_decisive_provenance(provenance, basis=basis)
+    return ProtectionVerificationResult(
+        check=check,
+        status="NOT VERIFIED",
         provenance=provenance,
         basis=basis,
         missing_evidence=(),
@@ -131,11 +149,11 @@ def assert_result_matches_pair(
     upstream_node_id: str,
     downstream_node_id: str,
 ) -> None:
-    """Prevent a verified result from being reused for a different protection pair."""
-    if result.status != "VERIFIED":
+    """Prevent a decisive result from being reused for a different protection pair."""
+    if result.status not in ("VERIFIED", "NOT VERIFIED"):
         return
     if result.provenance is None:
-        raise ValueError("VERIFIED result is invalid without provenance")
+        raise ValueError(f"{result.status} result is invalid without provenance")
     expected = (upstream_node_id, downstream_node_id)
     if result.provenance.pair_key != expected:
         raise ValueError(
