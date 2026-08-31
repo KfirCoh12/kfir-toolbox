@@ -12,7 +12,12 @@ from typing import Literal, Sequence
 from .catalogs import BREAKER_RATINGS_A
 
 BreakerCandidateStatus = Literal["CANDIDATE", "NO_CANDIDATE"]
-VerificationStatus = Literal["NOT CHECKED", "INSUFFICIENT DATA", "VERIFIED"]
+VerificationStatus = Literal[
+    "NOT CHECKED",
+    "INSUFFICIENT DATA",
+    "VERIFIED",
+    "NOT VERIFIED",
+]
 
 
 @dataclass(frozen=True)
