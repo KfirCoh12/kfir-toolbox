@@ -4,6 +4,11 @@ This module deliberately stops at the main board busbar. It can either carry a
 reviewed declared fault level or calculate a transformer-terminal approximation from
 nameplate kVA and impedance. It does not propagate fault current through downstream
 cables and it is not an IEC 60909 short-circuit study.
+
+Engineering inputs and traceability are intentionally separate: a numeric result may
+be calculated when the required electrical inputs are present, while missing project
+references remain explicit and prevent that result from being treated as fully
+traceable verification evidence.
 """
 from dataclasses import dataclass
 from math import isfinite, sqrt
@@ -15,8 +20,8 @@ FaultSourceKind = Literal["DECLARED_BUSBAR", "TRANSFORMER_TERMINAL"]
 @dataclass(frozen=True)
 class FaultSourceDeclaration:
     kind: FaultSourceKind
-    evidence_record_ref: str
-    rule_basis_ref: str
+    evidence_record_ref: str = ""
+    rule_basis_ref: str = ""
     prospective_fault_current_ka: float | None = None
     transformer_rated_power_kva: float | None = None
     transformer_secondary_voltage_v: float | None = None
@@ -31,6 +36,19 @@ class RootBusbarFaultResult:
     basis: str
     source_kind: FaultSourceKind
 
+    @property
+    def missing_traceability(self) -> tuple[str, ...]:
+        missing: list[str] = []
+        if not self.evidence_record_ref.strip():
+            missing.append("source evidence record reference")
+        if not self.rule_basis_ref.strip():
+            missing.append("project / calculation basis reference")
+        return tuple(missing)
+
+    @property
+    def traceability_complete(self) -> bool:
+        return not self.missing_traceability
+
 
 def _positive(name: str, value: float | None) -> float:
     if value is None or not isfinite(value) or value <= 0:
@@ -38,25 +56,26 @@ def _positive(name: str, value: float | None) -> float:
     return float(value)
 
 
-def _required_ref(name: str, value: str) -> str:
-    clean = str(value).strip()
-    if not clean:
-        raise ValueError(f"{name} is required")
-    return clean
+def _clean_ref(value: str | None) -> str:
+    return "" if value is None else str(value).strip()
 
 
 def calculate_root_busbar_fault(
     declaration: FaultSourceDeclaration,
 ) -> RootBusbarFaultResult:
-    """Return a traceable prospective 3-phase RMS fault current at the root busbar.
+    """Return a prospective 3-phase RMS fault current at the root busbar.
 
-    ``DECLARED_BUSBAR`` carries a reviewed project value without recalculation.
+    ``DECLARED_BUSBAR`` carries a project value without recalculation.
     ``TRANSFORMER_TERMINAL`` uses the transformer-only approximation
     In = S/(sqrt(3)U), Ik = In*100/uk. Upstream network impedance, motors, parallel
     sources, voltage factors and downstream cable impedance are outside this result.
+
+    Traceability references are carried when supplied but are not prerequisites for
+    performing the numeric calculation. Callers must inspect ``traceability_complete``
+    before using this result as traceable verification evidence.
     """
-    evidence_ref = _required_ref("evidence_record_ref", declaration.evidence_record_ref)
-    rule_ref = _required_ref("rule_basis_ref", declaration.rule_basis_ref)
+    evidence_ref = _clean_ref(declaration.evidence_record_ref)
+    rule_ref = _clean_ref(declaration.rule_basis_ref)
 
     if declaration.kind == "DECLARED_BUSBAR":
         fault_ka = _positive(
@@ -69,9 +88,9 @@ def calculate_root_busbar_fault(
             rule_basis_ref=rule_ref,
             source_kind=declaration.kind,
             basis=(
-                f"Reviewed prospective fault current declared at the main board busbar: "
-                f"{fault_ka:g} kA RMS. The value is carried from the referenced project "
-                "record; this module does not recalculate its upstream network basis."
+                f"Prospective fault current declared at the main board busbar: "
+                f"{fault_ka:g} kA RMS. The value is carried from the project input; "
+                "this module does not recalculate its upstream network basis."
             ),
         )
 
