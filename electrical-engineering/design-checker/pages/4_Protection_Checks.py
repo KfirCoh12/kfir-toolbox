@@ -2,6 +2,8 @@
 import streamlit as st
 
 from src.board_persistence import load_last_board, save_last_board
+from src.fault_propagation import CableFaultPath
+from src.fault_propagation_hierarchy import relationship_fault_contexts
 from src.protection_evidence import CoordinationEvidence, FaultEvidence, ProtectiveDeviceEvidence
 from src.protection_hierarchy import protection_relationships
 from src.protection_summaries import protection_pair_summaries
@@ -85,6 +87,40 @@ def root_busbar_pair(graph, relationship) -> bool:
     )
 
 
+def branch_materials_by_circuit(payload: dict) -> dict[str, str]:
+    result: dict[str, str] = {}
+    branches = payload.get("branches", [])
+    if not isinstance(branches, list):
+        return result
+    for branch in branches:
+        if not isinstance(branch, dict):
+            continue
+        kind = branch.get("kind")
+        if kind == "final":
+            circuit_id = str(branch.get("circuit_id", "")).strip()
+        elif kind in ("field", "sub_board"):
+            circuit_id = str(branch.get("feeder_id", "")).strip()
+        else:
+            continue
+        material = str(branch.get("material", "")).strip()
+        if circuit_id and material:
+            result[circuit_id] = material
+    return result
+
+
+def required_fault_path_circuits(relationships) -> tuple[str, ...]:
+    parent_by_device = {item.downstream_node_id: item for item in relationships}
+    result: list[str] = []
+    for relationship in relationships:
+        parent = parent_by_device.get(relationship.upstream_node_id)
+        if parent is None or not parent.downstream_circuit_id:
+            continue
+        circuit_id = parent.downstream_circuit_id
+        if circuit_id not in result:
+            result.append(circuit_id)
+    return tuple(result)
+
+
 try:
     saved = load_last_board()
 except ValueError as exc:
@@ -135,7 +171,7 @@ with st.expander("Fault source", expanded=saved_mode == "NONE"):
         "Source basis",
         options=list(mode_by_label),
         index=list(mode_by_label).index(label_by_mode[saved_mode]),
-        key="fault_source_mode_v2",
+        key="fault_source_mode_v3",
     )
     source_mode = mode_by_label[source_label]
     source_payload = {"kind": source_mode}
@@ -149,20 +185,20 @@ with st.expander("Fault source", expanded=saved_mode == "NONE"):
                 value=(float(saved_fault_source["prospective_fault_current_ka"]) if saved_fault_source.get("prospective_fault_current_ka") is not None else None),
                 step=0.1,
                 format="%.2f",
-                key="fault_source_declared_ka_v2",
+                key="fault_source_declared_ka_v3",
             )
             source_record = st.text_input(
                 "Fault study / source record",
                 value=str(saved_fault_source.get("evidence_record_ref", "")),
                 placeholder="e.g. utility fault study / approved calculation",
-                key="fault_source_record_declared_v2",
+                key="fault_source_record_declared_v3",
             )
         with c2:
             source_rule = st.text_input(
                 "Project / calculation basis reference",
                 value=str(saved_fault_source.get("rule_basis_ref", "")),
                 placeholder="e.g. project protection basis",
-                key="fault_source_rule_declared_v2",
+                key="fault_source_rule_declared_v3",
             )
         source_payload.update({
             "prospective_fault_current_ka": declared_fault,
@@ -188,27 +224,27 @@ with st.expander("Fault source", expanded=saved_mode == "NONE"):
                 min_value=0.001,
                 value=(float(saved_fault_source["transformer_rated_power_kva"]) if saved_fault_source.get("transformer_rated_power_kva") is not None else None),
                 step=50.0,
-                key="fault_source_tx_kva_v2",
+                key="fault_source_tx_kva_v3",
             )
             transformer_uk = st.number_input(
                 "Transformer impedance uk (%)",
                 min_value=0.001,
                 value=(float(saved_fault_source["transformer_impedance_percent"]) if saved_fault_source.get("transformer_impedance_percent") is not None else None),
                 step=0.1,
-                key="fault_source_tx_uk_v2",
+                key="fault_source_tx_uk_v3",
             )
         with c2:
             source_record = st.text_input(
                 "Transformer / source record",
                 value=str(saved_fault_source.get("evidence_record_ref", "")),
                 placeholder="e.g. transformer nameplate / datasheet",
-                key="fault_source_record_tx_v2",
+                key="fault_source_record_tx_v3",
             )
             source_rule = st.text_input(
                 "Project / calculation basis reference",
                 value=str(saved_fault_source.get("rule_basis_ref", "")),
                 placeholder="e.g. approved transformer-terminal approximation basis",
-                key="fault_source_rule_tx_v2",
+                key="fault_source_rule_tx_v3",
             )
         source_payload.update({
             "transformer_rated_power_kva": transformer_kva,
@@ -230,7 +266,7 @@ with st.expander("Fault source", expanded=saved_mode == "NONE"):
                 ))
             except ValueError as exc:
                 st.warning(str(exc))
-        st.warning("This is a transformer-terminal approximation, not a full IEC 60909 study. Upstream impedance, motors, parallel sources and downstream cable impedance are outside the result.")
+        st.warning("This is a transformer-terminal approximation, not a full IEC 60909 study. Upstream impedance, motors and parallel sources remain outside the source result.")
 
     else:
         source_payload = {"kind": "NONE"}
@@ -263,25 +299,111 @@ if source_result is not None:
             st.caption(f"Basis: {source_result.rule_basis_ref}")
 
 contexts = calculated.context_by_circuit_id
+materials_by_circuit = branch_materials_by_circuit(saved)
+path_circuit_ids = required_fault_path_circuits(relationships)
+saved_fault_network = saved.get("fault_network")
+if not isinstance(saved_fault_network, dict):
+    saved_fault_network = {}
+saved_lengths = saved_fault_network.get("cable_lengths_m")
+if not isinstance(saved_lengths, dict):
+    saved_lengths = {}
+
+lengths_by_circuit: dict[str, float] = {}
+if path_circuit_ids:
+    st.markdown("### Downstream fault paths")
+    st.caption("Cable size, parallel runs and material are reused from the board model. Enter each feeder length once; every downstream breaker supplied through that feeder reuses it.")
+    with st.expander("Feeder lengths", expanded=any(circuit_id not in saved_lengths for circuit_id in path_circuit_ids)):
+        for circuit_id in path_circuit_ids:
+            context = contexts.get(circuit_id)
+            material = materials_by_circuit.get(circuit_id)
+            detail_parts = []
+            if context is not None:
+                detail_parts.append(cable_label(context.cable_mm2, context.cable_runs))
+            if material:
+                detail_parts.append(material.title())
+            st.markdown(f"**{circuit_id}**" + (" · " + " · ".join(detail_parts) if detail_parts else ""))
+            saved_length = saved_lengths.get(circuit_id)
+            length_value = float(saved_length) if saved_length is not None else None
+            length = st.number_input(
+                f"{circuit_id} cable length (m)",
+                min_value=0.01,
+                value=length_value,
+                step=1.0,
+                key=f"fault_path_length_v1_{circuit_id}",
+                label_visibility="collapsed",
+                placeholder="Cable length (m)",
+            )
+            if length is not None:
+                lengths_by_circuit[circuit_id] = float(length)
+            if context is None or context.cable_mm2 is None:
+                st.caption("Cable size is not available from Board Planner, so this path cannot yet be propagated.")
+            elif material not in ("copper", "aluminium"):
+                st.caption("Cable material is not available from Board Planner, so this path cannot yet be propagated.")
+        st.caption("Screening uses a resistance-only 20 °C conductor model and deliberately omits cable reactance. It is intended to keep breaking-capacity screening on the high-current side, not to replace IEC 60909.")
+
+network_payload = {"cable_lengths_m": lengths_by_circuit}
+if network_payload != saved_fault_network:
+    updated_saved = dict(saved)
+    updated_saved["fault_network"] = network_payload
+    try:
+        save_last_board(updated_saved)
+        saved = updated_saved
+    except OSError as exc:
+        st.warning(f"Could not persist feeder-length settings: {exc}")
+
+cable_paths: dict[str, CableFaultPath] = {}
+for circuit_id, length_m in lengths_by_circuit.items():
+    context = contexts.get(circuit_id)
+    material = materials_by_circuit.get(circuit_id)
+    if (
+        context is None
+        or context.cable_mm2 is None
+        or material not in ("copper", "aluminium")
+    ):
+        continue
+    cable_paths[circuit_id] = CableFaultPath(
+        circuit_id=circuit_id,
+        material=material,
+        cross_section_mm2=context.cable_mm2,
+        parallel_runs=context.cable_runs or 1,
+        length_m=length_m,
+    )
+
+fault_contexts = relationship_fault_contexts(
+    graph,
+    relationships,
+    root_busbar_fault_current_ka=(source_result.prospective_fault_current_ka if source_result is not None else None),
+    cable_path_by_circuit_id=cable_paths,
+)
+fault_context_by_pair = {item.pair_key: item for item in fault_contexts}
+auto_fault_by_pair = {
+    item.pair_key: item.prospective_fault_current_ka
+    for item in fault_contexts
+    if item.prospective_fault_current_ka is not None
+}
+
 st.markdown("### Protection review")
-st.caption("Board Planner values are read-only. Main-busbar fault level is filled from the project source when calculable; downstream fault levels remain unresolved until cable/network impedance is modeled.")
+st.caption("Board values are read-only. Fault kA is filled from the project source and downstream feeder paths when enough data exists; manual edits remain possible for reviewed project values.")
 
 base_rows = []
-auto_fault_by_pair = {}
 for relationship in relationships:
     circuit = relationship.downstream_circuit_id or relationship.downstream_node_id
     context = contexts.get(circuit)
-    auto_fault = None
-    if source_result is not None and root_busbar_pair(graph, relationship):
-        auto_fault = source_result.prospective_fault_current_ka
-        auto_fault_by_pair[relationship.pair_key] = auto_fault
+    fault_context = fault_context_by_pair[relationship.pair_key]
+    if fault_context.prospective_fault_current_ka is not None:
+        fault_basis = "Main busbar" if fault_context.path_circuit_id is None else f"Via {fault_context.path_circuit_id}"
+    elif fault_context.path_circuit_id:
+        fault_basis = f"Needs {fault_context.path_circuit_id} path"
+    else:
+        fault_basis = "Needs source"
     base_rows.append({
         "Circuit": circuit,
         "Design current": amp_label(context.design_current_a if context else None, decimals=1),
         "Upstream protection": device_label(graph, relationship.upstream_node_id, relationship.upstream_rating_a),
         "Downstream protection": device_label(graph, relationship.downstream_node_id, relationship.downstream_rating_a),
         "Cable": cable_label(context.cable_mm2, context.cable_runs) if context else "—",
-        "Fault kA": auto_fault,
+        "Fault basis": fault_basis,
+        "Fault kA": fault_context.prospective_fault_current_ka,
         "Breaking kA": None,
     })
 
@@ -295,11 +417,12 @@ edited = st.data_editor(
         "Design current": st.column_config.TextColumn("Ib", disabled=True),
         "Upstream protection": st.column_config.TextColumn("Upstream protection", disabled=True),
         "Downstream protection": st.column_config.TextColumn("Downstream protection", disabled=True),
-        "Cable": st.column_config.TextColumn("Cable", disabled=True),
-        "Fault kA": st.column_config.NumberColumn("Fault kA", min_value=0.001, step=0.1, format="%.2f", help="Prospective fault current at the downstream device. Root-busbar values can be supplied automatically by the project fault source; downstream values are not guessed."),
+        "Cable": st.column_config.TextColumn("Protected cable", disabled=True),
+        "Fault basis": st.column_config.TextColumn("Fault basis", disabled=True),
+        "Fault kA": st.column_config.NumberColumn("Fault kA", min_value=0.001, step=0.1, format="%.2f", help="Prospective 3-phase fault current at the downstream protective device. Auto values are screening context and can be overridden by a reviewed project value."),
         "Breaking kA": st.column_config.NumberColumn("Breaking kA", min_value=0.001, step=0.1, format="%.2f", help="Declared breaking capacity of the downstream protective device."),
     },
-    key="protection_review_matrix_v5",
+    key="protection_review_matrix_v6",
 )
 edited_rows = rows_from_editor(edited)
 
@@ -308,12 +431,18 @@ pair_options = {
     for index, row in enumerate(base_rows)
 }
 st.markdown("### Relationship details")
-selected_label = st.selectbox("Relationship", options=list(pair_options), key="evidence_pair_selector_v5")
+selected_label = st.selectbox("Relationship", options=list(pair_options), key="evidence_pair_selector_v6")
 selected_index = pair_options[selected_label]
 selected_relationship = relationships[selected_index]
+selected_fault_context = fault_context_by_pair[selected_relationship.pair_key]
 selected_auto_fault = auto_fault_by_pair.get(selected_relationship.pair_key)
 if selected_auto_fault is not None:
-    st.caption(f"Fault level for this relationship comes from the main-board source: {selected_auto_fault:.2f} kA. Editing the table value overrides that value for this session only.")
+    if selected_fault_context.path_circuit_id is None:
+        st.caption(f"Fault level comes from the main-board source: {selected_auto_fault:.2f} kA.")
+    else:
+        st.caption(f"Fault level is propagated through {selected_fault_context.path_circuit_id}: {selected_auto_fault:.2f} kA screening value.")
+else:
+    st.caption(selected_fault_context.basis)
 
 with st.expander("Advanced traceability", expanded=False):
     st.caption("Breaker-capacity provenance still lives here until a protective-device library supplies it automatically. Project fault-source traceability is stored once above.")
@@ -322,16 +451,16 @@ with st.expander("Advanced traceability", expanded=False):
         default_rule = ""
         if source_result is not None and selected_auto_fault is not None and source_result.traceability_complete:
             default_rule = source_result.rule_basis_ref
-        rule_ref = st.text_input("Breaking-capacity rule / project basis reference", value=default_rule, key=f"rule_v5_{selected_index}", placeholder="e.g. project protection basis")
-        record_ref = st.text_input("Evidence record for the declared numeric comparison", key=f"record_v5_{selected_index}", placeholder="e.g. breaker schedule / datasheet + fault record package")
+        rule_ref = st.text_input("Breaking-capacity rule / project basis reference", value=default_rule, key=f"rule_v6_{selected_index}", placeholder="e.g. project protection basis")
+        record_ref = st.text_input("Evidence record for the declared numeric comparison", key=f"record_v6_{selected_index}", placeholder="e.g. breaker schedule / datasheet + fault record package")
     with c2:
-        downstream_make = st.text_input("Downstream make", key=f"down_make_v5_{selected_index}")
-        downstream_model = st.text_input("Downstream model", key=f"down_model_v5_{selected_index}")
+        downstream_make = st.text_input("Downstream make", key=f"down_make_v6_{selected_index}")
+        downstream_model = st.text_input("Downstream model", key=f"down_model_v6_{selected_index}")
 
-st.session_state[f"saved_rule_v5_{selected_index}"] = rule_ref.strip()
-st.session_state[f"saved_record_v5_{selected_index}"] = record_ref.strip()
-st.session_state[f"saved_down_make_v5_{selected_index}"] = downstream_make.strip()
-st.session_state[f"saved_down_model_v5_{selected_index}"] = downstream_model.strip()
+st.session_state[f"saved_rule_v6_{selected_index}"] = rule_ref.strip()
+st.session_state[f"saved_record_v6_{selected_index}"] = record_ref.strip()
+st.session_state[f"saved_down_make_v6_{selected_index}"] = downstream_make.strip()
+st.session_state[f"saved_down_model_v6_{selected_index}"] = downstream_model.strip()
 
 evidence_by_pair = {}
 requested_pairs = {relationship.pair_key for relationship in relationships}
@@ -344,8 +473,8 @@ for index, (relationship, row) in enumerate(zip(relationships, edited_rows)):
     try:
         fault_ka = positive_or_none(row.get("Fault kA"), f"{row['Circuit']} fault current")
         breaking_ka = positive_or_none(row.get("Breaking kA"), f"{row['Circuit']} breaking capacity")
-        make = st.session_state.get(f"saved_down_make_v5_{index}", "")
-        model = st.session_state.get(f"saved_down_model_v5_{index}", "")
+        make = st.session_state.get(f"saved_down_make_v6_{index}", "")
+        model = st.session_state.get(f"saved_down_model_v6_{index}", "")
         downstream = None
         if any((make, model, breaking_ka is not None)):
             downstream = ProtectiveDeviceEvidence(
@@ -358,15 +487,11 @@ for index, (relationship, row) in enumerate(zip(relationships, edited_rows)):
             downstream_device=downstream,
             fault=FaultEvidence(prospective_fault_current_ka=fault_ka) if fault_ka is not None else None,
         )
-        saved_rule = st.session_state.get(f"saved_rule_v5_{index}", "")
-        saved_record = st.session_state.get(f"saved_record_v5_{index}", "")
+        saved_rule = st.session_state.get(f"saved_rule_v6_{index}", "")
+        saved_record = st.session_state.get(f"saved_record_v6_{index}", "")
         if saved_rule:
             rule_refs[pair] = saved_rule
-        elif (
-            source_result is not None
-            and source_result.traceability_complete
-            and pair in auto_fault_by_pair
-        ):
+        elif source_result is not None and source_result.traceability_complete and pair in auto_fault_by_pair:
             rule_refs[pair] = source_result.rule_basis_ref
         if saved_record:
             record_refs[pair] = saved_record
@@ -398,13 +523,17 @@ status_cols[3].metric("Selectivity", status_label(selected_summary.selectivity_s
 
 with st.expander("Why this status?", expanded=False):
     st.write(selected_summary.breaking_capacity_basis)
+    st.markdown("**Fault-current basis**")
+    st.write(selected_fault_context.basis)
+    if selected_fault_context.missing_inputs:
+        st.markdown("**Still needed for automatic fault propagation**")
+        for item in selected_fault_context.missing_inputs:
+            st.write("•", item)
     missing = list(selected_summary.breaking_capacity_missing_evidence)
     if missing:
         st.markdown("**Still needed for breaking-capacity verification**")
         for item in missing:
             st.write("•", item)
-    if selected_auto_fault is None and source_result is not None:
-        st.caption("This relationship is downstream of feeder/circuit impedance. The main-board fault level is intentionally not copied here until that impedance is modeled.")
     st.caption(f"Overall protection: {status_label(selected_summary.protection_status)}. Rating order is never treated as selectivity evidence.")
 
-st.info("Fault calculation and traceability are now separate: calculable fault current is shown immediately, while missing references remain explicit. Downstream fault propagation and a protective-device library are the next reductions in manual input.")
+st.info("Main-board fault current can now propagate through known feeder lengths using a conservative resistance-only screening model. The next major reduction in manual input is a protective-device library for breaking capacity and manufacturer evidence.")
