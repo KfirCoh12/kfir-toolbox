@@ -22,7 +22,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""<div class="hero"><div class="eyebrow">Electrical engineering · Design review</div><h1>🛡️ Protection Checks</h1><p>Review what the Board Planner already knows and focus only on missing protection evidence. Planning candidates are shown as context; they are never treated as proof of protection or selectivity.</p></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="hero"><div class="eyebrow">Electrical engineering · Design review</div><h1>🛡️ Protection Checks</h1><p>Review what the Board Planner already knows and add only the protection evidence the project does not yet contain. Planning candidates are context only; they are never treated as proof of protection or selectivity.</p></div>""", unsafe_allow_html=True)
 
 
 def status_label(status: str) -> str:
@@ -46,8 +46,10 @@ def positive_or_none(value, label: str):
     return number
 
 
-def amp_label(value):
-    return "—" if value is None else f"{value:g} A"
+def amp_label(value, decimals: int = 0):
+    if value is None:
+        return "—"
+    return f"{value:.{decimals}f} A" if decimals else f"{value:g} A"
 
 
 def cable_label(mm2, runs):
@@ -60,6 +62,11 @@ def cable_label(mm2, runs):
 def node_label(graph, node_id: str) -> str:
     node = graph.node_by_id.get(node_id)
     return node.label if node is not None else node_id
+
+
+def device_label(graph, node_id: str, rating_a: float | None) -> str:
+    label = node_label(graph, node_id)
+    return label if rating_a is None else f"{label} · {rating_a:g} A"
 
 
 def rows_from_editor(value):
@@ -96,7 +103,7 @@ if not relationships:
 
 contexts = calculated.context_by_circuit_id
 st.markdown("### Protection review")
-st.caption("Design current, breaker and cable values are imported automatically from Board Planner. Fault level and device breaking capacity remain evidence inputs until those sources are modeled elsewhere in the project.")
+st.caption("Board Planner values are read-only. Enter fault level and device breaking capacity only where they are known; the tool will keep unresolved checks explicit rather than guessing.")
 
 base_rows = []
 for relationship in relationships:
@@ -104,11 +111,9 @@ for relationship in relationships:
     context = contexts.get(circuit)
     base_rows.append({
         "Circuit": circuit,
-        "Design current": amp_label(context.design_current_a if context else None),
-        "Upstream": node_label(graph, relationship.upstream_node_id),
-        "Upstream rating": amp_label(relationship.upstream_rating_a),
-        "Downstream": node_label(graph, relationship.downstream_node_id),
-        "Downstream rating": amp_label(relationship.downstream_rating_a),
+        "Design current": amp_label(context.design_current_a if context else None, decimals=1),
+        "Upstream protection": device_label(graph, relationship.upstream_node_id, relationship.upstream_rating_a),
+        "Downstream protection": device_label(graph, relationship.downstream_node_id, relationship.downstream_rating_a),
         "Cable": cable_label(context.cable_mm2, context.cable_runs) if context else "—",
         "Fault kA": None,
         "Breaking kA": None,
@@ -122,40 +127,38 @@ edited = st.data_editor(
     column_config={
         "Circuit": st.column_config.TextColumn("Circuit", disabled=True),
         "Design current": st.column_config.TextColumn("Ib", disabled=True),
-        "Upstream": st.column_config.TextColumn("Upstream", disabled=True),
-        "Upstream rating": st.column_config.TextColumn("Upstream A", disabled=True),
-        "Downstream": st.column_config.TextColumn("Downstream", disabled=True),
-        "Downstream rating": st.column_config.TextColumn("Downstream A", disabled=True),
+        "Upstream protection": st.column_config.TextColumn("Upstream protection", disabled=True),
+        "Downstream protection": st.column_config.TextColumn("Downstream protection", disabled=True),
         "Cable": st.column_config.TextColumn("Cable", disabled=True),
         "Fault kA": st.column_config.NumberColumn("Fault kA", min_value=0.001, step=0.1, format="%.2f", help="Prospective fault current at the downstream device. This is not inferred from breaker size."),
         "Breaking kA": st.column_config.NumberColumn("Breaking kA", min_value=0.001, step=0.1, format="%.2f", help="Declared breaking capacity of the downstream protective device."),
     },
-    key="protection_review_matrix_v2",
+    key="protection_review_matrix_v3",
 )
 edited_rows = rows_from_editor(edited)
 
-st.markdown("### Evidence details")
 pair_options = {
-    f"{row['Circuit']} · {row['Upstream']} → {row['Downstream']}": index
+    f"{row['Circuit']} · {row['Upstream protection']} → {row['Downstream protection']}": index
     for index, row in enumerate(base_rows)
 }
-selected_label = st.selectbox("Relationship", options=list(pair_options), key="evidence_pair_selector_v2")
+st.markdown("### Relationship details")
+selected_label = st.selectbox("Relationship", options=list(pair_options), key="evidence_pair_selector_v3")
 selected_index = pair_options[selected_label]
 
 with st.expander("Advanced traceability", expanded=False):
-    st.caption("Only audit/provenance details live here. They do not replace engineering data and will later move to project/device records where possible.")
+    st.caption("Audit/provenance details only. These should eventually come from project and device records instead of being re-entered here.")
     c1, c2 = st.columns(2)
     with c1:
-        rule_ref = st.text_input("Rule / project basis reference", key=f"rule_v2_{selected_index}", placeholder="e.g. project protection basis")
-        record_ref = st.text_input("Evidence record reference", key=f"record_v2_{selected_index}", placeholder="e.g. fault study / calculation record")
+        rule_ref = st.text_input("Rule / project basis reference", key=f"rule_v3_{selected_index}", placeholder="e.g. project protection basis")
+        record_ref = st.text_input("Evidence record reference", key=f"record_v3_{selected_index}", placeholder="e.g. fault study / calculation record")
     with c2:
-        downstream_make = st.text_input("Downstream make", key=f"down_make_v2_{selected_index}")
-        downstream_model = st.text_input("Downstream model", key=f"down_model_v2_{selected_index}")
+        downstream_make = st.text_input("Downstream make", key=f"down_make_v3_{selected_index}")
+        downstream_model = st.text_input("Downstream model", key=f"down_model_v3_{selected_index}")
 
-st.session_state[f"saved_rule_v2_{selected_index}"] = rule_ref.strip()
-st.session_state[f"saved_record_v2_{selected_index}"] = record_ref.strip()
-st.session_state[f"saved_down_make_v2_{selected_index}"] = downstream_make.strip()
-st.session_state[f"saved_down_model_v2_{selected_index}"] = downstream_model.strip()
+st.session_state[f"saved_rule_v3_{selected_index}"] = rule_ref.strip()
+st.session_state[f"saved_record_v3_{selected_index}"] = record_ref.strip()
+st.session_state[f"saved_down_make_v3_{selected_index}"] = downstream_make.strip()
+st.session_state[f"saved_down_model_v3_{selected_index}"] = downstream_model.strip()
 
 evidence_by_pair = {}
 requested_pairs = {relationship.pair_key for relationship in relationships}
@@ -168,8 +171,8 @@ for index, (relationship, row) in enumerate(zip(relationships, edited_rows)):
     try:
         fault_ka = positive_or_none(row.get("Fault kA"), f"{row['Circuit']} fault current")
         breaking_ka = positive_or_none(row.get("Breaking kA"), f"{row['Circuit']} breaking capacity")
-        make = st.session_state.get(f"saved_down_make_v2_{index}", "")
-        model = st.session_state.get(f"saved_down_model_v2_{index}", "")
+        make = st.session_state.get(f"saved_down_make_v3_{index}", "")
+        model = st.session_state.get(f"saved_down_model_v3_{index}", "")
         downstream = None
         if any((make, model, breaking_ka is not None)):
             downstream = ProtectiveDeviceEvidence(
@@ -182,8 +185,8 @@ for index, (relationship, row) in enumerate(zip(relationships, edited_rows)):
             downstream_device=downstream,
             fault=FaultEvidence(prospective_fault_current_ka=fault_ka) if fault_ka is not None else None,
         )
-        saved_rule = st.session_state.get(f"saved_rule_v2_{index}", "")
-        saved_record = st.session_state.get(f"saved_record_v2_{index}", "")
+        saved_rule = st.session_state.get(f"saved_rule_v3_{index}", "")
+        saved_record = st.session_state.get(f"saved_record_v3_{index}", "")
         if saved_rule:
             rule_refs[pair] = saved_rule
         if saved_record:
@@ -206,30 +209,21 @@ summaries = protection_pair_summaries(
     breaking_capacity_evidence_record_ref_by_pair=record_refs,
 )
 
-st.markdown("### Review status")
-result_rows = []
-for summary in summaries:
-    circuit = summary.downstream_circuit_id or summary.downstream_node_id
-    context = contexts.get(circuit)
-    result_rows.append({
-        "Circuit": circuit,
-        "Ib": amp_label(context.design_current_a if context else None),
-        "Breaker": amp_label(summary.downstream_rating_a),
-        "Cable": cable_label(context.cable_mm2, context.cable_runs) if context else "—",
-        "Breaking capacity": status_label(summary.breaking_capacity_status),
-        "Protection": status_label(summary.protection_status),
-        "Selectivity": status_label(summary.selectivity_status),
-    })
-st.dataframe(result_rows, use_container_width=True, hide_index=True)
-
 selected_summary = summaries[selected_index]
+selected_context = contexts.get(selected_summary.downstream_circuit_id or selected_summary.downstream_node_id)
+status_cols = st.columns(4)
+status_cols[0].metric("Ib", amp_label(selected_context.design_current_a if selected_context else None, decimals=1))
+status_cols[1].metric("Breaker", amp_label(selected_summary.downstream_rating_a))
+status_cols[2].metric("Breaking capacity", status_label(selected_summary.breaking_capacity_status))
+status_cols[3].metric("Selectivity", status_label(selected_summary.selectivity_status))
+
 with st.expander("Why this status?", expanded=False):
-    st.markdown(f"**{selected_label}**")
     st.write(selected_summary.breaking_capacity_basis)
     missing = list(selected_summary.breaking_capacity_missing_evidence)
     if missing:
         st.markdown("**Still needed for breaking-capacity verification**")
         for item in missing:
             st.write("•", item)
+    st.caption(f"Overall protection: {status_label(selected_summary.protection_status)}. Rating order is never treated as selectivity evidence.")
 
-st.info("The tool now imports Board Planner sizing automatically. Breaking-capacity verification still needs fault-level and device-capacity evidence; overall protection and selectivity remain separate checks and are not inferred from rating order.")
+st.info("The table is the working review surface. Detailed status and traceability are shown only for the selected relationship so large boards do not duplicate the entire schedule below it.")
