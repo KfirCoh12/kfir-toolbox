@@ -9,6 +9,11 @@ Private hosted sessions may additionally enter ``persistence_scope_for_email``.
 That scope stores board data below an opaque per-user directory so authenticated
 users cannot overwrite one another's working boards. The email itself is never
 written into the filesystem path.
+
+The saved board is also shared by adjacent engineering pages. Callers may therefore
+write only the fields they own; existing top-level project metadata is preserved
+unless the caller explicitly replaces that key. This prevents Board Planner autosave
+from deleting protection/fault-study data written by another page.
 """
 from __future__ import annotations
 
@@ -121,6 +126,19 @@ def _existing_board_payload(target: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _merge_existing_board_payload(existing: dict | None, payload: dict) -> dict:
+    """Merge a caller-owned board update with existing shared project metadata.
+
+    Explicit keys in ``payload`` always win, including explicit ``None`` or empty
+    values. Keys omitted by the caller are retained from the existing board. This
+    lets Board Planner update its live structural fields without deleting protection
+    data maintained by Protection Checks.
+    """
+    merged = dict(existing or {})
+    merged.update(payload)
+    return merged
+
+
 def _fsync_directory(directory: Path) -> None:
     """Persist directory metadata where the host platform supports directory fsync."""
     flags = os.O_RDONLY
@@ -139,13 +157,18 @@ def _fsync_directory(directory: Path) -> None:
 
 
 def save_last_board(payload: dict, path: Path | None = None) -> Path:
-    """Durably and atomically persist the current Board Planner working state as JSON."""
+    """Durably persist a board update while retaining other pages' top-level data.
+
+    The board autosave is a shared project record. Callers may submit the fields they
+    own; omitted existing top-level fields are retained, while explicitly supplied
+    keys replace the previous value.
+    """
     target = Path(path) if path is not None else board_autosave_path()
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    board_payload = dict(payload)
+    existing = _existing_board_payload(target)
+    board_payload = _merge_existing_board_payload(existing, dict(payload))
     if _is_widget_minimum_supply(board_payload):
-        existing = _existing_board_payload(target)
         if existing is not None and not _is_widget_minimum_supply(existing):
             previous_vll = existing.get("line_to_line_voltage_v")
             previous_vln = existing.get("line_to_neutral_voltage_v")
