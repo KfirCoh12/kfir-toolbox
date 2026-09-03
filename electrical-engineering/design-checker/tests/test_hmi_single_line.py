@@ -2,6 +2,8 @@ import unittest
 
 from src.board_graph import add_radial_circuit, make_radial_board_graph
 from src.hmi_single_line import render_hmi_single_line_svg
+from src.sample_boards import office_700m2_150_people_board
+from src.working_board_plan import calculate_working_board
 
 
 class HmiSingleLineTests(unittest.TestCase):
@@ -22,9 +24,7 @@ class HmiSingleLineTests(unittest.TestCase):
             demand_factor=1.0,
             material="copper",
         )
-
         svg = render_hmi_single_line_svg(graph)
-
         self.assertIn("<svg", svg)
         self.assertIn("Main busbar", svg)
         self.assertIn("C-01 protection", svg)
@@ -60,12 +60,32 @@ class HmiSingleLineTests(unittest.TestCase):
             material="copper",
         )
         selected = tuple(node.node_id for node in graph.nodes if node.circuit_id == "C-01")
-
         svg = render_hmi_single_line_svg(graph, selected_node_ids=selected)
-
         self.assertIn("#39aef7", svg)
         self.assertIn('filter="url(#glow)"', svg)
         self.assertIn("C-01 protection", svg)
+
+    def test_large_office_board_overview_collapses_field_descendants(self):
+        calculated = calculate_working_board(office_700m2_150_people_board())
+        graph = calculated.graph
+        root_selected = tuple(
+            node.node_id
+            for node in graph.nodes
+            if node.kind in ("incomer", "busbar") and (node.board_ref or graph.board_id) == graph.board_id
+        )
+        svg = render_hmi_single_line_svg(graph, selected_node_ids=root_selected)
+        self.assertIn('viewBox="0 0 820 ', svg)
+        self.assertIn("outgoing circuits", svg)
+        self.assertNotIn("GP-01 protection", svg)
+
+    def test_large_office_board_circuit_focus_hides_unrelated_siblings(self):
+        calculated = calculate_working_board(office_700m2_150_people_board())
+        graph = calculated.graph
+        selected = tuple(node.node_id for node in graph.nodes if node.circuit_id == "GP-01")
+        svg = render_hmi_single_line_svg(graph, selected_node_ids=selected)
+        self.assertIn("GP-01 protection", svg)
+        self.assertNotIn("GP-02 protection", svg)
+        self.assertIn('filter="url(#glow)"', svg)
 
 
 if __name__ == "__main__":
