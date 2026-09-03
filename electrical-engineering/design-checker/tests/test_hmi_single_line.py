@@ -33,6 +33,8 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("<rect", svg)
         self.assertIn("<line", svg)
         self.assertIn('data-role="busbar-rail"', svg)
+        self.assertIn('data-role="structural-spine"', svg)
+        self.assertIn('vector-effect="non-scaling-stroke"', svg)
 
     def test_selected_nodes_use_accent_without_changing_graph(self):
         graph = make_radial_board_graph(
@@ -84,7 +86,8 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("GP-01 protection", svg)
         self.assertIn("Open-office socket zone 01", svg)
         self.assertIn("rotate(-90", svg)
-        self.assertIn('data-role="structural-spine"', svg)
+        self.assertGreaterEqual(svg.count('data-role="structural-spine"'), 10)
+        self.assertGreaterEqual(svg.count('vector-effect="non-scaling-stroke"'), 20)
         self.assertIn('data-role="field-junction"', svg)
         self.assertIn('data-role="busbar-junction"', svg)
         self.assertIn('data-role="busbar-rail"', svg)
@@ -103,6 +106,7 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertNotIn("GP-02 protection", svg)
         self.assertIn('filter="url(#glow)"', svg)
         self.assertIn('data-role="structural-spine"', svg)
+        self.assertIn('vector-effect="non-scaling-stroke"', svg)
         self.assertIn('data-role="busbar-rail"', svg)
 
 
