@@ -39,8 +39,10 @@ _LAYOUT_CSS = r"""
 .bp-diagram-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:1rem 0 .45rem;padding:.55rem .7rem;border:1px solid #213a57;border-radius:8px;background:linear-gradient(90deg,rgba(14,31,51,.98),rgba(9,23,39,.96))}
 .bp-diagram-title{font-size:.78rem;font-weight:760;color:#edf6ff;text-transform:uppercase;letter-spacing:.02em}.bp-diagram-sub{font-size:.64rem;color:#718aa7;margin-top:.08rem}.bp-diagram-mode{font-size:.61rem;color:#8fd1ff;border:1px solid rgba(54,167,255,.3);background:rgba(54,167,255,.07);border-radius:5px;padding:.22rem .45rem}
 .bp-save-note{font-size:.61rem;color:#78b99b;margin:.35rem 0 0}
-.bp-review-detail{border-left:3px solid #f7bf4f;background:rgba(247,191,79,.055);padding:.48rem .62rem;border-radius:0 7px 7px 0;margin-top:.55rem}.bp-review-detail strong{font-size:.68rem;color:#e7d29d}.bp-review-detail span{display:block;font-size:.63rem;color:#9d9276;line-height:1.4;margin-top:.12rem}
+.bp-review-detail{border-left:3px solid #f7bf4f;background:rgba(247,191,79,.055);padding:.48rem .62rem;border-radius:0 7px 7px 0}.bp-review-detail strong{font-size:.68rem;color:#e7d29d}.bp-review-detail span{display:block;font-size:.63rem;color:#9d9276;line-height:1.4;margin-top:.12rem}
 .bp-review-empty{font-size:.66rem;color:#7895b6;padding:.32rem .05rem .08rem}
+.bp-review-note{font-size:.62rem;color:#718aa7;line-height:1.35;padding:.35rem .15rem 0}
+.bp-review-inspect{font-size:.61rem;color:#7895b6;text-transform:uppercase;letter-spacing:.08em;font-weight:760;margin:.35rem 0 .25rem}
 </style>
 """
 
@@ -77,6 +79,8 @@ def _ensure_live_state(saved: dict) -> None:
         st.session_state["bp_hmi_source_fingerprint"] = fingerprint
         st.session_state["bp_hmi_selected_uid"] = "root"
         st.session_state["bp_hmi_focus_circuit_id"] = None
+        st.session_state["bp_review_group_code"] = None
+        st.session_state["bp_review_issue_key"] = None
 
 
 def _descendants(branches: list[dict], parent_uid: str) -> list[dict]:
@@ -101,6 +105,10 @@ def _event_rows(event) -> list[int]:
         if isinstance(event, dict):
             return list(event.get("selection", {}).get("rows", []))
     return []
+
+
+def _review_issue_key(issue) -> str:
+    return f"{issue.code}|{issue.target_id}"
 
 
 def _focus_route(board: dict, route_circuit_id: str | None) -> None:
@@ -202,67 +210,129 @@ def _render_review_panel(board: dict, review: DesignReviewSummary) -> None:
     with st.container(border=True):
         _panel_header(
             "Design review",
-            "Planning issues and known model limitations. Selecting a row focuses its route in the schedule and single-line.",
+            "Repeated conditions are grouped. Inspect a group only when you need its affected routes.",
             badge,
         )
-        filter_col, clear_col, note_col = st.columns([1.15, 0.9, 4.0], gap="small")
+        filter_col, clear_col, note_col = st.columns([1.0, 0.9, 4.6], gap="small")
         with filter_col:
             review_filter = st.selectbox(
-                "Show",
+                "Review filter",
                 ["All", "Attention", "Limitations"],
                 key="bp_review_filter",
+                label_visibility="collapsed",
             )
         with clear_col:
-            st.caption("Route navigation")
-            if st.button("Clear review focus", use_container_width=True, key="bp_review_clear"):
+            if st.button("Clear focus", use_container_width=True, key="bp_review_clear"):
                 st.session_state["bp_hmi_focus_circuit_id"] = None
                 st.session_state["bp_hmi_selected_uid"] = "root"
+                st.session_state["bp_review_issue_key"] = None
                 st.rerun()
         with note_col:
-            st.caption(
-                f"{total} current review items. These are planning outputs/scope notes, not protection-verification results."
+            st.markdown(
+                f'<div class="bp-review-note">{total} target-level items condensed into repeated engineering conditions. Planning/scope only — not protection-verification results.</div>',
+                unsafe_allow_html=True,
             )
 
-        visible = [
-            issue
-            for issue in review.issues
+        visible_groups = [
+            group
+            for group in review.groups
             if review_filter == "All"
-            or (review_filter == "Attention" and issue.severity == "ATTENTION")
-            or (review_filter == "Limitations" and issue.severity == "LIMITATION")
+            or (review_filter == "Attention" and group.severity == "ATTENTION")
+            or (review_filter == "Limitations" and group.severity == "LIMITATION")
         ]
-        if not visible:
+        if not visible_groups:
             st.markdown(
                 '<div class="bp-review-empty">No items in this review filter. Other engineering checks remain separate.</div>',
                 unsafe_allow_html=True,
             )
             return
 
-        rows = [
+        group_rows = [
             {
-                "Severity": issue.severity,
-                "Target": issue.target_id,
-                "Scope": issue.scope.replace("_", " ").title(),
-                "Issue": issue.title,
+                "!": "●" if group.severity == "ATTENTION" else "◇",
+                "Issue": group.title,
+                "Affected": group.target_count,
+                "Scope": group.scope.replace("_", " ").title(),
             }
-            for issue in visible
+            for group in visible_groups
         ]
-        event = st.dataframe(
-            rows,
+        group_event = st.dataframe(
+            group_rows,
             use_container_width=True,
             hide_index=True,
-            height=min(330, 74 + 34 * len(rows)),
+            height=min(170, 46 + 34 * len(group_rows)),
             on_select="rerun",
             selection_mode="single-row",
-            key="bp_design_review_select",
+            key="bp_design_review_group_select",
         )
-        selected_rows = _event_rows(event)
-        if selected_rows and 0 <= selected_rows[0] < len(visible):
-            issue = visible[selected_rows[0]]
+        group_rows_selected = _event_rows(group_event)
+        if group_rows_selected and 0 <= group_rows_selected[0] < len(visible_groups):
+            selected_code = visible_groups[group_rows_selected[0]].code
+            if st.session_state.get("bp_review_group_code") != selected_code:
+                st.session_state["bp_review_group_code"] = selected_code
+                st.session_state["bp_review_issue_key"] = None
+                st.rerun()
+
+        selected_group = next(
+            (
+                group
+                for group in visible_groups
+                if group.code == st.session_state.get("bp_review_group_code")
+            ),
+            None,
+        )
+        if selected_group is None:
+            return
+
+        st.markdown(
+            f'<div class="bp-review-inspect">Inspecting · {escape(selected_group.title)} · {selected_group.target_count} affected</div>',
+            unsafe_allow_html=True,
+        )
+        target_col, detail_col = st.columns([1.25, 2.75], gap="small")
+        with target_col:
+            focus = st.session_state.get("bp_hmi_focus_circuit_id")
+            target_rows = [
+                {
+                    "Target": issue.target_id,
+                    "Route": "●" if issue.route_circuit_id == focus else "",
+                }
+                for issue in selected_group.issues
+            ]
+            target_event = st.dataframe(
+                target_rows,
+                use_container_width=True,
+                hide_index=True,
+                height=min(190, 46 + 31 * len(target_rows)),
+                on_select="rerun",
+                selection_mode="single-row",
+                key="bp_design_review_target_select",
+            )
+            target_rows_selected = _event_rows(target_event)
+            if target_rows_selected and 0 <= target_rows_selected[0] < len(selected_group.issues):
+                issue = selected_group.issues[target_rows_selected[0]]
+                issue_key = _review_issue_key(issue)
+                st.session_state["bp_review_issue_key"] = issue_key
+                _focus_route(board, issue.route_circuit_id)
+
+        with detail_col:
+            selected_issue = next(
+                (
+                    issue
+                    for issue in selected_group.issues
+                    if _review_issue_key(issue) == st.session_state.get("bp_review_issue_key")
+                ),
+                None,
+            )
+            if selected_issue is None:
+                detail_title = f"{selected_group.target_count} affected routes"
+                detail_text = selected_group.detail
+            else:
+                detail_title = f"{selected_issue.target_id} · {selected_group.title}"
+                detail_text = selected_issue.detail
             st.markdown(
-                f'<div class="bp-review-detail"><strong>{escape(issue.target_id)} · {escape(issue.title)}</strong><span>{escape(issue.detail)}</span></div>',
+                f'<div class="bp-review-detail"><strong>{escape(detail_title)}</strong><span>{escape(detail_text)}</span></div>',
                 unsafe_allow_html=True,
             )
-            _focus_route(board, issue.route_circuit_id)
 
 
 def _apply_and_save(board: dict) -> None:
