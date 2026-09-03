@@ -7,7 +7,7 @@ from typing import Literal
 
 from .ampacity_data import (
     AMBIENT_AIR_FACTOR_XLPE_EPR,
-    BASE_IZ_METHOD_E_3_LOADED,
+    BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS,
     DATASET_METADATA,
     GROUPING_FACTOR_B5217,
 )
@@ -70,8 +70,8 @@ def calculate_supported_iz(data: CableAmpacityInput) -> AmpacityResult:
         unsupported.append("V0 data slice supports IEC reference Method E only")
     if data.environment != "air":
         unsupported.append("V0 data slice supports air installations only")
-    if data.loaded_conductors != 3:
-        unsupported.append("V0 data slice supports three loaded conductors only")
+    if data.loaded_conductors not in BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS:
+        unsupported.append("V0 data slice supports two or three loaded conductors only")
     if data.thdi_percent is None:
         unsupported.append("thdi_percent is required to exclude unsupported harmonic treatment")
     elif data.thdi_percent > 15:
@@ -81,10 +81,11 @@ def calculate_supported_iz(data: CableAmpacityInput) -> AmpacityResult:
     if data.ambient_temperature_c is None:
         unsupported.append("ambient_temperature_c is required")
 
-    sizes = BASE_IZ_METHOD_E_3_LOADED.get(data.material, {})
+    loaded_dataset = BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS.get(data.loaded_conductors, {})
+    sizes = loaded_dataset.get(data.material, {})
     base = sizes.get(float(data.cross_section_mm2))
     if base is None:
-        unsupported.append("cross-section/material combination is outside the narrow V0 dataset")
+        unsupported.append("cross-section/material/loaded-conductor combination is outside the narrow V0 dataset")
 
     ambient_factor = None
     if data.ambient_temperature_c is not None:
@@ -129,8 +130,12 @@ def calculate_supported_iz(data: CableAmpacityInput) -> AmpacityResult:
     assert base is not None and ambient_factor is not None and grouping_factor is not None
     per_run_iz = base * ambient_factor * grouping_factor
     aggregate_iz = per_run_iz * data.parallel_runs
+    loaded_label = DATASET_METADATA["base_ampacity_columns"][data.loaded_conductors]
 
-    trace.append(f"Base Iz per run = {base:.3f} A from {DATASET_METADATA['standard']} Table {DATASET_METADATA['base_ampacity_tables'][data.material]}")
+    trace.append(
+        f"Base Iz per run = {base:.3f} A from {DATASET_METADATA['standard']} "
+        f"Table {DATASET_METADATA['base_ampacity_tables'][data.material]} ({loaded_label})"
+    )
     trace.append(f"Ambient-air factor = {ambient_factor:.3f} from Table {DATASET_METADATA['ambient_air_table']} at {data.ambient_temperature_c:.1f} °C")
     trace.append(f"Grouping factor = {grouping_factor:.3f} from Table {DATASET_METADATA['grouping_table']} for {data.grouped_circuits} relevant circuit(s)/cable(s)")
     trace.append(f"Corrected Iz per run = {base:.3f} × {ambient_factor:.3f} × {grouping_factor:.3f} = {per_run_iz:.3f} A")
