@@ -32,6 +32,7 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("Test load", svg)
         self.assertIn("<rect", svg)
         self.assertIn("<line", svg)
+        self.assertIn('data-role="busbar-rail"', svg)
 
     def test_selected_nodes_use_accent_without_changing_graph(self):
         graph = make_radial_board_graph(
@@ -66,7 +67,7 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn('filter="url(#glow)"', svg)
         self.assertIn("C-01 protection", svg)
 
-    def test_large_office_board_keeps_readable_intrinsic_width_and_full_field_paths(self):
+    def test_large_office_board_keeps_readable_intrinsic_width_and_explicit_structure(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
         graph = calculated.graph
         root_selected = tuple(
@@ -83,8 +84,11 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("GP-01 protection", svg)
         self.assertIn("Open-office socket zone 01", svg)
         self.assertIn("rotate(-90", svg)
-        self.assertIn('stroke-width="3.2"', svg)
-        self.assertIn('stroke="#9bb0c8"', svg)
+        self.assertIn('data-role="structural-spine"', svg)
+        self.assertIn('data-role="field-junction"', svg)
+        self.assertIn('data-role="busbar-junction"', svg)
+        self.assertIn('data-role="busbar-rail"', svg)
+        self.assertIn("#d7e5f4", svg)
 
     def test_large_office_board_circuit_focus_hides_unrelated_siblings_and_keeps_field_busbar(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
@@ -98,7 +102,8 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("GP-01 protection", svg)
         self.assertNotIn("GP-02 protection", svg)
         self.assertIn('filter="url(#glow)"', svg)
-        self.assertIn('stroke-width="3.2"', svg)
+        self.assertIn('data-role="structural-spine"', svg)
+        self.assertIn('data-role="busbar-rail"', svg)
 
 
 if __name__ == "__main__":
