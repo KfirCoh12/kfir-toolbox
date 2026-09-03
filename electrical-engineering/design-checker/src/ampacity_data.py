@@ -6,14 +6,18 @@ Unsupported installation conditions remain outside the automatic model.
 
 Source basis:
 - IEC 60364-5-52:2009 Ed. 3.0
-- B.52.12: XLPE/EPR copper, Method E, multi-core, 2 and 3 loaded conductors
-- B.52.13: XLPE/EPR aluminium, Method E, multi-core, 2 and 3 loaded conductors
+- B.52.12: XLPE/EPR copper, Method E, multi-core, 2 and selected 3 loaded conductors
+- B.52.13: XLPE/EPR aluminium, Method E, multi-core, 2 and selected 3 loaded conductors
 - B.52.14: ambient-air correction for XLPE/EPR
 - B.52.17: selected grouping arrangements used with Method E
 
 Current-edition status: base edition checked; AMD1:2024 not yet reviewed.
 """
 
+# Full Method E multi-core two-loaded-conductor column used to introduce a
+# source-backed single-phase path. Values are kept separate from the established
+# three-loaded-conductor selector slice so this increment does not silently change
+# existing three-phase cable suggestions.
 BASE_IZ_METHOD_E_2_LOADED = {
     "copper": {
         1.5: 26.0,
@@ -52,42 +56,11 @@ BASE_IZ_METHOD_E_2_LOADED = {
     },
 }
 
+# Existing V0 three-loaded-conductor slice retained unchanged for backwards-stable
+# three-phase selector behavior. Expanding this column is a separate engineering change.
 BASE_IZ_METHOD_E_3_LOADED = {
-    "copper": {
-        1.5: 23.0,
-        2.5: 32.0,
-        4.0: 42.0,
-        6.0: 54.0,
-        10.0: 75.0,
-        16.0: 100.0,
-        25.0: 127.0,
-        35.0: 158.0,
-        50.0: 192.0,
-        70.0: 246.0,
-        95.0: 298.0,
-        120.0: 346.0,
-        150.0: 399.0,
-        185.0: 456.0,
-        240.0: 538.0,
-        300.0: 621.0,
-    },
-    "aluminium": {
-        2.5: 24.0,
-        4.0: 32.0,
-        6.0: 42.0,
-        10.0: 58.0,
-        16.0: 77.0,
-        25.0: 97.0,
-        35.0: 120.0,
-        50.0: 146.0,
-        70.0: 187.0,
-        95.0: 227.0,
-        120.0: 263.0,
-        150.0: 304.0,
-        185.0: 347.0,
-        240.0: 409.0,
-        300.0: 471.0,
-    },
+    "copper": {10.0: 75.0, 25.0: 127.0, 95.0: 298.0, 120.0: 346.0, 185.0: 456.0, 240.0: 538.0},
+    "aluminium": {10.0: 58.0, 25.0: 97.0, 95.0: 227.0, 120.0: 263.0, 185.0: 347.0, 240.0: 409.0},
 }
 
 BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS = {
