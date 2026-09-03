@@ -87,12 +87,22 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('"Design review"', self.hmi)
         self.assertNotIn("sum(1 for item in calculated.circuit_contexts if item.breaker_candidate_a is None", self.hmi)
 
-    def test_review_row_focuses_schedule_sld_and_editable_branch(self):
+    def test_review_is_grouped_before_target_level_navigation(self):
+        self.assertIn("review.groups", self.hmi)
+        self.assertIn('"Affected": group.target_count', self.hmi)
+        self.assertIn('key="bp_design_review_group_select"', self.hmi)
+        self.assertIn('key="bp_design_review_target_select"', self.hmi)
+        self.assertIn("selected_group.issues", self.hmi)
+        self.assertIn("height=min(170", self.hmi)
+        self.assertIn("height=min(190", self.hmi)
+        self.assertIn('label_visibility="collapsed"', self.hmi)
+
+    def test_review_target_focuses_schedule_sld_and_editable_branch(self):
         self.assertIn("branch_uid_for_route_id", self.hmi)
         self.assertIn("_focus_route(board, issue.route_circuit_id)", self.hmi)
         self.assertIn('st.session_state["bp_hmi_selected_uid"] = branch_uid', self.hmi)
-        self.assertIn('key="bp_design_review_select"', self.hmi)
-        self.assertIn('"Clear review focus"', self.hmi)
+        self.assertIn('st.session_state["bp_review_issue_key"] = issue_key', self.hmi)
+        self.assertIn('"Clear focus"', self.hmi)
         self.assertIn("circuit_id", self.review_navigation)
         self.assertIn("feeder_id", self.review_navigation)
 

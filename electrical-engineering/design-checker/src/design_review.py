@@ -41,6 +41,26 @@ class DesignReviewIssue:
 
 
 @dataclass(frozen=True)
+class DesignReviewGroup:
+    """One repeated review condition with all of its affected targets."""
+
+    code: DesignReviewCode
+    severity: DesignReviewSeverity
+    scope: DesignReviewScope
+    title: str
+    detail: str
+    issues: tuple[DesignReviewIssue, ...]
+
+    @property
+    def target_count(self) -> int:
+        return len(self.issues)
+
+    @property
+    def target_ids(self) -> tuple[str, ...]:
+        return tuple(issue.target_id for issue in self.issues)
+
+
+@dataclass(frozen=True)
 class DesignReviewSummary:
     issues: tuple[DesignReviewIssue, ...]
 
@@ -58,6 +78,34 @@ class DesignReviewSummary:
         for issue in self.issues:
             grouped.setdefault(issue.target_id, []).append(issue)
         return {key: tuple(value) for key, value in grouped.items()}
+
+    @property
+    def groups(self) -> tuple[DesignReviewGroup, ...]:
+        """Collapse repeated conditions without losing target-level issue records."""
+        grouped: dict[
+            tuple[DesignReviewCode, DesignReviewSeverity, DesignReviewScope, str, str],
+            list[DesignReviewIssue],
+        ] = {}
+        order: list[
+            tuple[DesignReviewCode, DesignReviewSeverity, DesignReviewScope, str, str]
+        ] = []
+        for issue in self.issues:
+            key = (issue.code, issue.severity, issue.scope, issue.title, issue.detail)
+            if key not in grouped:
+                grouped[key] = []
+                order.append(key)
+            grouped[key].append(issue)
+        return tuple(
+            DesignReviewGroup(
+                code=key[0],
+                severity=key[1],
+                scope=key[2],
+                title=key[3],
+                detail=key[4],
+                issues=tuple(grouped[key]),
+            )
+            for key in order
+        )
 
 
 def _issue(
