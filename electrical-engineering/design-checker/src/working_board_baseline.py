@@ -1,6 +1,8 @@
 """Working-board baseline used while developing and stress-testing the tool."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from .board_persistence import clear_last_board, load_last_board, save_last_board
 from .sample_boards import office_700m2_150_people_board
 
@@ -33,13 +35,13 @@ def is_legacy_small_protection_test_board(payload: dict | None) -> bool:
     )
 
 
-def ensure_office_working_baseline() -> tuple[dict, bool]:
+def ensure_office_working_baseline(path: Path | None = None) -> tuple[dict, bool]:
     """Return the working board, seeding the office stress board when appropriate.
 
     A missing board or the exact legacy two-circuit demo is replaced by the reusable
     office fixture. Any other saved board is preserved unchanged.
     """
-    saved = load_last_board()
+    saved = load_last_board(path)
     if saved is not None and not is_legacy_small_protection_test_board(saved):
         return saved, False
 
@@ -47,6 +49,6 @@ def ensure_office_working_baseline() -> tuple[dict, bool]:
     if saved is not None:
         # This is an intentional replacement of the known demo board, not a partial
         # metadata update, so clear first rather than inheriting its project metadata.
-        clear_last_board()
-    save_last_board(fixture)
+        clear_last_board(path)
+    save_last_board(fixture, path)
     return fixture, True
