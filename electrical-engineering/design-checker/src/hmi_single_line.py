@@ -94,25 +94,24 @@ def _line(
     stroke = _ACCENT if active else (_STRUCTURAL if structural else _LINE_DIM)
     glow = ' filter="url(#glow)"' if active else ""
     if structural:
-        # Structural feeders are solid geometry rather than thin SVG strokes so they
-        # remain visible at normal browser zoom on wide engineering drawings.
-        if abs(x2 - x1) < 0.01:
-            top = min(y1, y2)
-            height = abs(y2 - y1)
-            return (
-                f'<rect x="{x1 - width / 2:.1f}" y="{top:.1f}" width="{width:g}" height="{height:.1f}" '
-                f'rx="{min(width / 2, 2.5):g}" fill="{stroke}" data-role="structural-spine"{glow}/>'
-            )
-        if abs(y2 - y1) < 0.01:
-            left = min(x1, x2)
-            rail_width = abs(x2 - x1)
-            return (
-                f'<rect x="{left:.1f}" y="{y1 - width / 2:.1f}" width="{rail_width:.1f}" height="{width:g}" '
-                f'rx="{min(width / 2, 2.5):g}" fill="{stroke}" data-role="structural-spine"{glow}/>'
-            )
+        # Structural feeders are deliberately drawn as a two-layer non-scaling stroke.
+        # This keeps source/incomer/field spines visible even when a very wide SVG is
+        # displayed inside a narrower browser viewport.
+        foreground = max(width, 7.0)
+        underlay = foreground + 5.0
+        return (
+            f'<g data-role="structural-spine">'
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+            f'stroke="#03101c" stroke-width="{underlay:g}" stroke-linecap="round" '
+            f'vector-effect="non-scaling-stroke"/>'
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+            f'stroke="{stroke}" stroke-width="{foreground:g}" stroke-linecap="round" '
+            f'vector-effect="non-scaling-stroke"{glow}/>'
+            f'</g>'
+        )
     return (
         f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-        f'stroke="{stroke}" stroke-width="{width:g}" stroke-linecap="round"{glow}/>'
+        f'stroke="{stroke}" stroke-width="{width:g}" stroke-linecap="round"/>'
     )
 
 
@@ -229,7 +228,7 @@ def _draw_busbar(
         cursor += branch_width
         branch_active = _branch_has_selection(graph, device, selected_ids)
         structural_branch = child_busbar is not None
-        path_width = 5.0 if structural_branch else 2.1
+        path_width = 7.0 if structural_branch else 2.1
 
         svg.append(_line(x, y, x, y + 32, active=branch_active, width=path_width, structural=structural_branch))
         svg.append(
@@ -286,7 +285,7 @@ def _draw_busbar(
         svg.append(_text(x + 14, endpoint_y + 4, endpoint.label, anchor="start", size=11, fill=_TEXT, weight=720))
         if child_busbar is not None:
             next_y = endpoint_y + 82
-            svg.append(_line(x, endpoint_y, x, next_y, active=branch_active, width=5.0, structural=True))
+            svg.append(_line(x, endpoint_y, x, next_y, active=branch_active, width=7.0, structural=True))
             svg.append(
                 f'<circle cx="{x:.1f}" cy="{next_y:.1f}" r="6" fill="{junction_color}" '
                 f'data-role="busbar-junction"{endpoint_glow}/>'
@@ -335,7 +334,7 @@ def render_hmi_single_line_svg(graph: BoardElectricalGraph, *, selected_node_ids
     svg.append(f'<circle cx="{cx:.1f}" cy="35" r="17" fill="#0a1727" stroke="{source_stroke}" stroke-width="2.2"{source_glow}/>')
     svg.append(_text(cx, 39, "~", size=16, fill=_TEXT, weight=600))
     svg.append(_text(cx + 28, 32, source.label, anchor="start", size=11, fill=_TEXT, weight=700))
-    svg.append(_line(cx, 52, cx, 71, active=source_active or incomer_active or busbar_active, width=5.0, structural=True))
+    svg.append(_line(cx, 52, cx, 71, active=source_active or incomer_active or busbar_active, width=7.0, structural=True))
     if incomer is not None:
         svg.append(
             _breaker_symbol(
@@ -348,7 +347,7 @@ def render_hmi_single_line_svg(graph: BoardElectricalGraph, *, selected_node_ids
             )
         )
     if busbar is not None:
-        svg.append(_line(cx, 118, cx, 143, active=busbar_active, width=5.0, structural=True))
+        svg.append(_line(cx, 118, cx, 143, active=busbar_active, width=7.0, structural=True))
         _draw_busbar(svg, graph, busbar, cx, 143, width - 140, selected_ids)
     svg.append("</svg>")
     return "".join(svg)
