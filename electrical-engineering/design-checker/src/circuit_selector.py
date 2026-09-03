@@ -1,8 +1,8 @@
-"""Conservative V0.6 automatic circuit selection over explicitly supported data."""
+"""Conservative V0.7 automatic circuit selection over explicitly supported data."""
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from .ampacity_data import BASE_IZ_METHOD_E_3_LOADED
+from .ampacity_data import BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS
 from .cable import CableAmpacityInput, calculate_supported_iz
 from .connection import ConnectionOption, suggest_connection
 from .current import CurrentResult, calculate_design_current
@@ -10,6 +10,7 @@ from .voltage_drop import VoltageDropResult, calculate_voltage_drop
 
 Material = Literal["copper", "aluminium"]
 STANDARD_BREAKER_CANDIDATES_A = (6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630)
+
 
 @dataclass(frozen=True)
 class CircuitSelectionInput:
@@ -38,33 +39,52 @@ class InstallationSupportAssessment:
     missing_or_unsupported: tuple[str, ...]
 
 
+def _loaded_conductor_basis(phase: Literal["single", "three"]) -> tuple[int, bool]:
+    """Map circuit phase to the explicit Method E ampacity column.
+
+    A line-neutral single-phase final circuit is treated as two loaded conductors:
+    phase and neutral. This only selects the applicable base ampacity column; it does
+    not verify harmonic-rich neutral loading or other installation conditions.
+    """
+    if phase == "single":
+        return 2, True
+    if phase == "three":
+        return 3, False
+    raise ValueError("phase must be 'single' or 'three'")
+
+
 def assess_installation_support(data: CircuitSelectionInput) -> InstallationSupportAssessment:
     """Preflight whether the requested installation conditions fit the narrow automatic ampacity dataset.
 
-    The probe uses a cross-section already present in the material dataset so the result
-    reflects installation-condition support rather than candidate cable size. It does not
-    add or approximate any engineering data.
+    The probe uses a cross-section already present in the phase-specific material
+    dataset so the result reflects installation-condition support rather than candidate
+    cable size. It does not add or approximate engineering data.
     """
-    if data.phase != "three":
-        return InstallationSupportAssessment(
-            "NOT VERIFIED",
-            tuple(),
-            ("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.",),
-        )
     if data.parallel_runs <= 0:
         raise ValueError("parallel_runs must be greater than 0")
 
-    sizes = sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
+    loaded_conductors, neutral_loaded = _loaded_conductor_basis(data.phase)
+    sizes = sorted(
+        BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS
+        .get(loaded_conductors, {})
+        .get(data.material, {})
+        .keys()
+    )
     if not sizes:
         return InstallationSupportAssessment(
-            "NOT VERIFIED", tuple(), (f"No automatic ampacity dataset is mapped for conductor material {data.material}.",)
+            "NOT VERIFIED",
+            tuple(),
+            (
+                f"No automatic Method E ampacity dataset is mapped for {data.phase}-phase "
+                f"{data.material} with {loaded_conductors} loaded conductors.",
+            ),
         )
 
     probe = calculate_supported_iz(CableAmpacityInput(
         material=data.material,
         cross_section_mm2=sizes[0],
         insulation="xlpe_epr",
-        loaded_conductors=3,
+        loaded_conductors=loaded_conductors,
         installation_method="E",
         environment="air",
         ambient_temperature_c=data.ambient_temperature_c,
@@ -73,18 +93,19 @@ def assess_installation_support(data: CircuitSelectionInput) -> InstallationSupp
         parallel_runs=data.parallel_runs,
         equal_current_sharing_confirmed=data.equal_current_sharing_confirmed,
         thdi_percent=0.0,
-        neutral_loaded=False,
+        neutral_loaded=neutral_loaded,
     ))
     if probe.iz_a is None:
         return InstallationSupportAssessment(
             "NOT VERIFIED", tuple(), tuple(dict.fromkeys(probe.missing_or_unsupported))
         )
 
+    conductor_label = "two loaded conductors (phase + neutral)" if loaded_conductors == 2 else "three loaded conductors"
     supported = [
         "XLPE/EPR insulation",
         "IEC reference Method E",
         "air installation",
-        "three loaded conductors",
+        conductor_label,
         f"ambient air temperature {data.ambient_temperature_c:g} °C",
         f"group count {data.grouped_circuits}",
     ]
@@ -93,6 +114,7 @@ def assess_installation_support(data: CircuitSelectionInput) -> InstallationSupp
     if data.parallel_runs > 1:
         supported.append(f"{data.parallel_runs} parallel runs with acceptable current sharing confirmed")
     return InstallationSupportAssessment("SUPPORTED", tuple(supported), tuple())
+
 
 @dataclass(frozen=True)
 class CircuitSelectionResult:
@@ -108,49 +130,120 @@ class CircuitSelectionResult:
     limitations: tuple[str, ...]
     trace: tuple[str, ...]
 
+
 def _first_breaker_at_or_above(ib_a: float) -> float | None:
     return next((float(x) for x in STANDARD_BREAKER_CANDIDATES_A if x >= ib_a), None)
 
+
 def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
-    current = calculate_design_current(load_type=data.load_type, load_value=data.load_value, voltage_v=data.voltage_v, phase=data.phase, power_factor=data.power_factor, demand_factor=data.demand_factor)
+    current = calculate_design_current(
+        load_type=data.load_type,
+        load_value=data.load_value,
+        voltage_v=data.voltage_v,
+        phase=data.phase,
+        power_factor=data.power_factor,
+        demand_factor=data.demand_factor,
+    )
     ib = current.design_current_a
     breaker = _first_breaker_at_or_above(ib)
-    limitations = ["Breaker candidate is a conventional rating suggestion only; IEC 60364-4-43 protection verification is not yet implemented."]
+    limitations = [
+        "Breaker candidate is a conventional rating suggestion only; IEC 60364-4-43 protection verification is not yet implemented."
+    ]
     trace = [f"Design current Ib = {ib:.3f} A"]
     if breaker is None:
-        return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, None, None, None, None, None, None, tuple(), tuple(limitations), tuple(trace + ["No breaker candidate in the declared V0.6 set is >= Ib."]))
+        return CircuitSelectionResult(
+            "NO SUPPORTED SOLUTION", current, None, None, None, None, None, None,
+            tuple(), tuple(limitations),
+            tuple(trace + ["No breaker candidate in the declared V0.7 set is >= Ib."]),
+        )
+
     trace.append(f"First declared breaker candidate >= Ib: {breaker:.0f} A")
     connection = suggest_connection(phase=data.phase, required_current_a=breaker)
     limitations.append(f"Connection rating evidence: {connection.evidence_status}.")
     trace.append(f"Connection suggestion for {breaker:.0f} A requirement: {connection.label}")
-    if data.phase != "three":
-        limitations.append("Automatic cable selection currently supports three-phase / three-loaded-conductor Method E cases only.")
-        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+
+    loaded_conductors, neutral_loaded = _loaded_conductor_basis(data.phase)
+    if data.phase == "single":
+        limitations.append(
+            "Single-phase Method E cable sizing uses the two-loaded-conductor base table with phase and neutral current-carrying; harmonic-rich neutral loading is not evaluated by this automatic selector."
+        )
+        trace.append(
+            "Single-phase ampacity basis: Method E multi-core, two loaded conductors (phase + neutral)."
+        )
+
     if data.parallel_runs <= 0:
         raise ValueError("parallel_runs must be greater than 0")
     if data.parallel_runs > 1:
-        limitations.append("Parallel-run sizing uses aggregate ampacity only when acceptable current sharing is explicitly confirmed and grouping includes all parallel runs.")
+        limitations.append(
+            "Parallel-run sizing uses aggregate ampacity only when acceptable current sharing is explicitly confirmed and grouping includes all parallel runs."
+        )
         if data.equal_current_sharing_confirmed is not True:
-            limitations.append("Parallel runs require explicit confirmation of acceptable current sharing per IEC 60364-5-52 clause 523.7 before automatic sizing can be verified.")
-            return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
+            limitations.append(
+                "Parallel runs require explicit confirmation of acceptable current sharing per IEC 60364-5-52 clause 523.7 before automatic sizing can be verified."
+            )
+            return CircuitSelectionResult(
+                "NOT VERIFIED", current, breaker, None, None, None, connection, None,
+                tuple(), tuple(dict.fromkeys(limitations)), tuple(trace),
+            )
         if data.grouped_circuits < data.parallel_runs:
-            limitations.append("Grouped circuits / cables must include at least all parallel runs before aggregate ampacity can be verified.")
-            return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
-        trace.append(f"Parallel cable request: {data.parallel_runs} runs with acceptable current sharing explicitly confirmed.")
+            limitations.append(
+                "Grouped circuits / cables must include at least all parallel runs before aggregate ampacity can be verified."
+            )
+            return CircuitSelectionResult(
+                "NOT VERIFIED", current, breaker, None, None, None, connection, None,
+                tuple(), tuple(dict.fromkeys(limitations)), tuple(trace),
+            )
+        trace.append(
+            f"Parallel cable request: {data.parallel_runs} runs with acceptable current sharing explicitly confirmed."
+        )
 
     support = assess_installation_support(data)
     if support.status == "NOT VERIFIED":
-        limitations.extend(f"Cable ampacity not verified: {reason}." for reason in support.missing_or_unsupported)
-        trace.append("Installation support preflight = NOT VERIFIED: " + "; ".join(support.missing_or_unsupported))
-        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(), tuple(dict.fromkeys(limitations)), tuple(trace))
-    trace.append("Installation support preflight = SUPPORTED for the narrow automatic ampacity dataset.")
+        limitations.extend(
+            f"Cable ampacity not verified: {reason}."
+            for reason in support.missing_or_unsupported
+        )
+        trace.append(
+            "Installation support preflight = NOT VERIFIED: "
+            + "; ".join(support.missing_or_unsupported)
+        )
+        return CircuitSelectionResult(
+            "NOT VERIFIED", current, breaker, None, None, None, connection, None,
+            tuple(), tuple(dict.fromkeys(limitations)), tuple(trace),
+        )
+    trace.append(
+        "Installation support preflight = SUPPORTED for the narrow automatic ampacity dataset."
+    )
 
-    rejected=[]
+    rejected: list[str] = []
     unsupported_conditions: list[str] = []
-    sizes=sorted(BASE_IZ_METHOD_E_3_LOADED.get(data.material, {}).keys())
+    sizes = sorted(
+        BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS
+        .get(loaded_conductors, {})
+        .get(data.material, {})
+        .keys()
+    )
     for size in sizes:
-        label = f"{data.parallel_runs} × {size:g} mm²/run" if data.parallel_runs > 1 else f"{size:g} mm²"
-        amp=calculate_supported_iz(CableAmpacityInput(material=data.material,cross_section_mm2=size,insulation="xlpe_epr",loaded_conductors=3,installation_method="E",environment="air",ambient_temperature_c=data.ambient_temperature_c,grouped_circuits=data.grouped_circuits,grouping_arrangement=data.grouping_arrangement,parallel_runs=data.parallel_runs,equal_current_sharing_confirmed=data.equal_current_sharing_confirmed,thdi_percent=0.0,neutral_loaded=False))
+        label = (
+            f"{data.parallel_runs} × {size:g} mm²/run"
+            if data.parallel_runs > 1
+            else f"{size:g} mm²"
+        )
+        amp = calculate_supported_iz(CableAmpacityInput(
+            material=data.material,
+            cross_section_mm2=size,
+            insulation="xlpe_epr",
+            loaded_conductors=loaded_conductors,
+            installation_method="E",
+            environment="air",
+            ambient_temperature_c=data.ambient_temperature_c,
+            grouped_circuits=data.grouped_circuits,
+            grouping_arrangement=data.grouping_arrangement,
+            parallel_runs=data.parallel_runs,
+            equal_current_sharing_confirmed=data.equal_current_sharing_confirmed,
+            thdi_percent=0.0,
+            neutral_loaded=neutral_loaded,
+        ))
         if amp.iz_a is None:
             reasons = tuple(dict.fromkeys(amp.missing_or_unsupported))
             unsupported_conditions.extend(reasons)
@@ -158,27 +251,73 @@ def select_circuit(data: CircuitSelectionInput) -> CircuitSelectionResult:
             rejected.append(f"{label}: ampacity not verified — {detail}")
             continue
         if amp.iz_a < breaker:
-            rejected.append(f"{label}: aggregate Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A"); continue
-        vd=None
+            rejected.append(
+                f"{label}: aggregate Iz {amp.iz_a:.1f} A < suggested In {breaker:.0f} A"
+            )
+            continue
+
+        vd = None
         if data.length_m is not None:
             vd_current = ib / data.parallel_runs
-            vd=calculate_voltage_drop(current_a=vd_current,length_m=data.length_m,cross_section_mm2=size,system_voltage_v=data.voltage_v,phase=data.phase,material=data.material,power_factor=data.power_factor,permitted_limit_percent=data.permitted_voltage_drop_percent,limit_source=data.voltage_drop_limit_source,allow_annex_g_defaults=data.allow_annex_g_defaults)
+            vd = calculate_voltage_drop(
+                current_a=vd_current,
+                length_m=data.length_m,
+                cross_section_mm2=size,
+                system_voltage_v=data.voltage_v,
+                phase=data.phase,
+                material=data.material,
+                power_factor=data.power_factor,
+                permitted_limit_percent=data.permitted_voltage_drop_percent,
+                limit_source=data.voltage_drop_limit_source,
+                allow_annex_g_defaults=data.allow_annex_g_defaults,
+            )
             if data.parallel_runs > 1:
-                limitations.append("Voltage drop for parallel runs is evaluated per identical run at the equal shared current; unequal sharing or dissimilar runs are outside this model.")
-                trace.append(f"Voltage-drop current per run = Ib {ib:.3f} / {data.parallel_runs} = {vd_current:.3f} A")
+                limitations.append(
+                    "Voltage drop for parallel runs is evaluated per identical run at the equal shared current; unequal sharing or dissimilar runs are outside this model."
+                )
+                trace.append(
+                    f"Voltage-drop current per run = Ib {ib:.3f} / {data.parallel_runs} = {vd_current:.3f} A"
+                )
             if vd.comparison == "FAIL":
-                rejected.append(f"{label}: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%"); continue
-            if vd.comparison == "NO LIMIT CHECKED": limitations.append("Voltage drop was calculated but no sourced permitted limit was checked.")
-        trace.append(f"Selected first supported cable candidate: {label}, aggregate Iz = {amp.iz_a:.1f} A")
-        return CircuitSelectionResult("SUGGESTION", current, breaker, size, amp.iz_a, data.parallel_runs, connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
+                rejected.append(
+                    f"{label}: voltage drop {vd.voltage_drop_percent:.2f}% exceeds {data.permitted_voltage_drop_percent:.2f}%"
+                )
+                continue
+            if vd.comparison == "NO LIMIT CHECKED":
+                limitations.append(
+                    "Voltage drop was calculated but no sourced permitted limit was checked."
+                )
+
+        trace.append(
+            f"Selected first supported cable candidate: {label}, aggregate Iz = {amp.iz_a:.1f} A"
+        )
+        return CircuitSelectionResult(
+            "SUGGESTION", current, breaker, size, amp.iz_a, data.parallel_runs,
+            connection, vd, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace),
+        )
 
     if unsupported_conditions:
         unsupported_unique = tuple(dict.fromkeys(unsupported_conditions))
-        limitations.extend(f"Cable ampacity not verified: {reason}." for reason in unsupported_unique)
-        trace.append("Automatic cable selection stopped because one or more installation conditions are outside the explicit ampacity dataset.")
-        return CircuitSelectionResult("NOT VERIFIED", current, breaker, None, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace))
+        limitations.extend(
+            f"Cable ampacity not verified: {reason}."
+            for reason in unsupported_unique
+        )
+        trace.append(
+            "Automatic cable selection stopped because one or more installation conditions are outside the explicit ampacity dataset."
+        )
+        return CircuitSelectionResult(
+            "NOT VERIFIED", current, breaker, None, None, None, connection, None,
+            tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace),
+        )
 
-    return CircuitSelectionResult("NO SUPPORTED SOLUTION", current, breaker, None, None, None, connection, None, tuple(rejected), tuple(dict.fromkeys(limitations)), tuple(trace + ["All requested installation conditions were supported, but no cable in the explicit V0.6 dataset passed the implemented checks."]))
+    return CircuitSelectionResult(
+        "NO SUPPORTED SOLUTION", current, breaker, None, None, None, connection, None,
+        tuple(rejected), tuple(dict.fromkeys(limitations)),
+        tuple(trace + [
+            "All requested installation conditions were supported, but no cable in the explicit V0.7 dataset passed the implemented checks."
+        ]),
+    )
+
 
 @dataclass(frozen=True)
 class CircuitMaterialOptionsResult:
@@ -229,7 +368,11 @@ def explain_circuit_selection(result: CircuitSelectionResult) -> CircuitSelectio
         cable_reason = "No supported cable candidate was selected for these conditions."
     else:
         runs = result.suggested_parallel_runs or 1
-        cable_label = f"{runs} × {result.suggested_cable_mm2:g} mm² parallel runs per phase" if runs > 1 else f"{result.suggested_cable_mm2:g} mm²"
+        cable_label = (
+            f"{runs} × {result.suggested_cable_mm2:g} mm² parallel runs per phase"
+            if runs > 1
+            else f"{result.suggested_cable_mm2:g} mm²"
+        )
         cable_reason = (
             f"{cable_label} is the first supported candidate "
             f"that passed the implemented checks; aggregate Iz {result.cable_iz_a:.1f} A"
@@ -261,16 +404,26 @@ def explain_circuit_selection(result: CircuitSelectionResult) -> CircuitSelectio
         elif vd.comparison == "FAIL":
             vd_reason = f"Voltage drop is {vd.voltage_drop_percent:.2f}% and exceeds the supplied limit."
         else:
-            vd_reason = f"Voltage drop is {vd.voltage_drop_percent:.2f}%; no sourced permitted limit was checked."
+            vd_reason = (
+                f"Voltage drop is {vd.voltage_drop_percent:.2f}%; no sourced permitted limit was checked."
+            )
 
     chain = [f"Ib {ib:.1f} A"]
     if result.suggested_breaker_a is not None:
         chain.append(f"{result.suggested_breaker_a:.0f} A breaker")
     if result.suggested_cable_mm2 is not None:
         runs = result.suggested_parallel_runs or 1
-        chain.append(f"{runs} × {result.suggested_cable_mm2:g} mm² cables" if runs > 1 else f"{result.suggested_cable_mm2:g} mm² cable")
+        chain.append(
+            f"{runs} × {result.suggested_cable_mm2:g} mm² cables"
+            if runs > 1
+            else f"{result.suggested_cable_mm2:g} mm² cable"
+        )
     if connection is not None:
-        chain.append(f"{connection.rating_a:.0f} A connection" if connection.rating_a is not None else "fixed connection")
+        chain.append(
+            f"{connection.rating_a:.0f} A connection"
+            if connection.rating_a is not None
+            else "fixed connection"
+        )
     summary = " → ".join(chain)
 
     return CircuitSelectionExplanation(
