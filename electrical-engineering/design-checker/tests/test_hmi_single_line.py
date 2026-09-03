@@ -1,3 +1,4 @@
+import re
 import unittest
 
 from src.board_graph import add_radial_circuit, make_radial_board_graph
@@ -65,7 +66,7 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn('filter="url(#glow)"', svg)
         self.assertIn("C-01 protection", svg)
 
-    def test_large_office_board_overview_collapses_field_descendants(self):
+    def test_large_office_board_keeps_readable_intrinsic_width_and_full_field_paths(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
         graph = calculated.graph
         root_selected = tuple(
@@ -74,15 +75,24 @@ class HmiSingleLineTests(unittest.TestCase):
             if node.kind in ("incomer", "busbar") and (node.board_ref or graph.board_id) == graph.board_id
         )
         svg = render_hmi_single_line_svg(graph, selected_node_ids=root_selected)
-        self.assertIn('viewBox="0 0 820 ', svg)
-        self.assertIn("outgoing circuits", svg)
-        self.assertNotIn("GP-01 protection", svg)
 
-    def test_large_office_board_circuit_focus_hides_unrelated_siblings(self):
+        width_match = re.search(r'<svg[^>]* width="(\d+)"', svg)
+        self.assertIsNotNone(width_match)
+        self.assertGreater(int(width_match.group(1)), 3000)
+        self.assertIn("FIELD-GP busbar", svg)
+        self.assertIn("GP-01 protection", svg)
+        self.assertIn("Open-office socket zone 01", svg)
+        self.assertIn("rotate(-90", svg)
+
+    def test_large_office_board_circuit_focus_hides_unrelated_siblings_and_keeps_field_busbar(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
         graph = calculated.graph
-        selected = tuple(node.node_id for node in graph.nodes if node.circuit_id == "GP-01")
-        svg = render_hmi_single_line_svg(graph, selected_node_ids=selected)
+        selected_ids = {node.node_id for node in graph.nodes if node.circuit_id == "GP-01"}
+        for node_id in tuple(selected_ids):
+            selected_ids.update(node.node_id for node in graph.ancestors_of(node_id))
+
+        svg = render_hmi_single_line_svg(graph, selected_node_ids=tuple(selected_ids))
+        self.assertIn("FIELD-GP busbar", svg)
         self.assertIn("GP-01 protection", svg)
         self.assertNotIn("GP-02 protection", svg)
         self.assertIn('filter="url(#glow)"', svg)
