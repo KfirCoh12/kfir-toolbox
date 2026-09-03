@@ -77,8 +77,17 @@ def _text(
     )
 
 
-def _line(x1: float, y1: float, x2: float, y2: float, *, active: bool = False, width: float = 2.0) -> str:
-    stroke = _ACCENT if active else _LINE_DIM
+def _line(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    *,
+    active: bool = False,
+    width: float = 2.0,
+    structural: bool = False,
+) -> str:
+    stroke = _ACCENT if active else (_LINE if structural else _LINE_DIM)
     glow = ' filter="url(#glow)"' if active else ""
     return f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{stroke}" stroke-width="{width:g}"{glow}/>'
 
@@ -91,14 +100,15 @@ def _breaker_symbol(
     *,
     highlighted: bool = False,
     compact_vertical: bool = False,
+    structural: bool = False,
 ) -> str:
     stroke = _ACCENT if highlighted else _LINE
     glow = ' filter="url(#glow)"' if highlighted else ""
     parts = [
-        _line(x, y - 23, x, y - 10, active=highlighted),
+        _line(x, y - 23, x, y - 10, active=highlighted, structural=structural),
         f'<rect x="{x - 13:.1f}" y="{y - 10:.1f}" width="26" height="20" rx="2" fill="#0a1727" stroke="{stroke}" stroke-width="1.7"{glow}/>',
         f'<line x1="{x - 8:.1f}" y1="{y + 6:.1f}" x2="{x + 8:.1f}" y2="{y - 6:.1f}" stroke="{stroke}" stroke-width="1.9"{glow}/>',
-        _line(x, y + 10, x, y + 26, active=highlighted),
+        _line(x, y + 10, x, y + 26, active=highlighted, structural=structural),
     ]
     if compact_vertical:
         parts.append(_text(x - 18, y + 12, label, anchor="start", size=9, fill=_TEXT, weight=680, rotate=-90))
@@ -189,9 +199,11 @@ def _draw_busbar(
         cursor += branch_width
         branch_active = _branch_has_selection(graph, device, selected_ids)
         leaf_branch = child_busbar is None
+        structural_branch = not leaf_branch
 
-        # Always draw the complete conductor between busbar, breaker and endpoint.
-        svg.append(_line(x, y, x, y + 32, active=branch_active, width=2.3))
+        # Structural field/sub-board feeders are deliberately brighter/heavier than final ways.
+        path_width = 3.2 if structural_branch else 2.1
+        svg.append(_line(x, y, x, y + 32, active=branch_active, width=path_width, structural=structural_branch))
         svg.append(
             _breaker_symbol(
                 x,
@@ -200,17 +212,18 @@ def _draw_busbar(
                 _rating(device),
                 highlighted=branch_active,
                 compact_vertical=leaf_branch,
+                structural=structural_branch,
             )
         )
         endpoint_y = y + 156
-        svg.append(_line(x, y + 81, x, endpoint_y, active=branch_active, width=2.3))
+        svg.append(_line(x, y + 81, x, endpoint_y, active=branch_active, width=path_width, structural=structural_branch))
 
         cable_text = _cable(cable)
         if cable_text:
             if leaf_branch:
                 svg.append(_text(x + 10, y + 134, cable_text, anchor="start", size=8, fill=_TEXT_DIM, weight=530, rotate=-90))
             else:
-                svg.append(_text(x + 10, y + 116, cable_text, anchor="start", size=8, fill=_TEXT_DIM, weight=530))
+                svg.append(_text(x + 12, y + 116, cable_text, anchor="start", size=9, fill=_TEXT_DIM, weight=580))
 
         if endpoint is None:
             svg.append(_text(x, endpoint_y + 18, "Unresolved endpoint", size=9, fill="#f7bf4f"))
@@ -227,7 +240,6 @@ def _draw_busbar(
                 f'<line x1="{x - 4:.1f}" y1="{endpoint_y + 4:.1f}" x2="{x + 4:.1f}" y2="{endpoint_y - 4:.1f}" '
                 f'stroke="{endpoint_color}" stroke-width="1.6"{endpoint_glow}/>'
             )
-            # Dense final-circuit descriptions run vertically beside their feeder so they do not collide.
             svg.append(_text(x + 18, endpoint_y - 8, endpoint.label, anchor="start", size=9, fill=_TEXT, weight=650, rotate=-90))
             detail = endpoint.display_detail or (
                 f"{endpoint.load_kw:g} kW · {'3P' if endpoint.phase == 'three' else '1P'}"
@@ -237,12 +249,14 @@ def _draw_busbar(
             if detail:
                 svg.append(_text(x, endpoint_y + 28, detail, size=8, fill=_TEXT_DIM, weight=500))
         else:
-            svg.append(f'<circle cx="{x:.1f}" cy="{endpoint_y:.1f}" r="4.5" fill="{endpoint_color}"{endpoint_glow}/>')
-            svg.append(_text(x + 10, endpoint_y + 4, endpoint.label, anchor="start", size=11, fill=_TEXT, weight=680))
+            # Field/sub-board endpoint is a visible junction in the structural feeder spine.
+            svg.append(f'<circle cx="{x:.1f}" cy="{endpoint_y:.1f}" r="5.5" fill="{endpoint_color}"{endpoint_glow}/>')
+            svg.append(_text(x + 12, endpoint_y + 4, endpoint.label, anchor="start", size=11, fill=_TEXT, weight=700))
             if child_busbar is not None:
-                # Field/sub-board paths are always continuous and the downstream busbar is always drawn.
-                next_y = endpoint_y + 62
-                svg.append(_line(x, endpoint_y + 5, x, next_y, active=branch_active, width=2.3))
+                next_y = endpoint_y + 74
+                svg.append(_line(x, endpoint_y + 5, x, next_y, active=branch_active, width=3.2, structural=True))
+                # Small tee marker makes the physical connection into the downstream busbar explicit.
+                svg.append(_line(x - 9, next_y, x + 9, next_y, active=branch_active, width=3.2, structural=True))
                 _draw_busbar(
                     svg,
                     graph,
@@ -263,7 +277,6 @@ def render_hmi_single_line_svg(graph: BoardElectricalGraph, *, selected_node_ids
     selected_ids = set(selected_node_ids)
 
     visible_leafs = _visible_leaf_count(graph, busbar, selected_ids) if busbar is not None else 1
-    # Keep a real engineering-drawing width instead of shrinking 40+ circuits into the viewport.
     width = max(900, min(6200, 104 * visible_leafs + 320))
 
     depth = 1
@@ -280,7 +293,7 @@ def render_hmi_single_line_svg(graph: BoardElectricalGraph, *, selected_node_ids
             for _, _, _, child_busbar in data:
                 if child_busbar is not None:
                     pending.append((child_busbar, level + 1))
-    height = max(640, 220 + depth * 250)
+    height = max(680, 220 + depth * 265)
     cx = width / 2
 
     source_active = source.node_id in selected_ids
@@ -296,11 +309,11 @@ def render_hmi_single_line_svg(graph: BoardElectricalGraph, *, selected_node_ids
     svg.append(f'<circle cx="{cx:.1f}" cy="35" r="17" fill="#0a1727" stroke="{source_stroke}" stroke-width="2"{source_glow}/>')
     svg.append(_text(cx, 39, "~", size=16, fill=_TEXT, weight=600))
     svg.append(_text(cx + 28, 32, source.label, anchor="start", size=11, fill=_TEXT, weight=700))
-    svg.append(_line(cx, 52, cx, 71, active=source_active or incomer_active or busbar_active, width=2.3))
+    svg.append(_line(cx, 52, cx, 71, active=source_active or incomer_active or busbar_active, width=3.2, structural=True))
     if incomer is not None:
-        svg.append(_breaker_symbol(cx, 92, incomer.label, _rating(incomer), highlighted=incomer_active or busbar_active))
+        svg.append(_breaker_symbol(cx, 92, incomer.label, _rating(incomer), highlighted=incomer_active or busbar_active, structural=True))
     if busbar is not None:
-        svg.append(_line(cx, 118, cx, 139, active=busbar_active, width=2.3))
+        svg.append(_line(cx, 118, cx, 139, active=busbar_active, width=3.2, structural=True))
         _draw_busbar(svg, graph, busbar, cx, 143, width - 140, selected_ids)
     svg.append("</svg>")
     return "".join(svg)

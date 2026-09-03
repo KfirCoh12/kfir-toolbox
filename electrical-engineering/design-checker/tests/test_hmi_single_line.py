@@ -83,6 +83,8 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("GP-01 protection", svg)
         self.assertIn("Open-office socket zone 01", svg)
         self.assertIn("rotate(-90", svg)
+        self.assertIn('stroke-width="3.2"', svg)
+        self.assertIn('stroke="#9bb0c8"', svg)
 
     def test_large_office_board_circuit_focus_hides_unrelated_siblings_and_keeps_field_busbar(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
@@ -96,6 +98,7 @@ class HmiSingleLineTests(unittest.TestCase):
         self.assertIn("GP-01 protection", svg)
         self.assertNotIn("GP-02 protection", svg)
         self.assertIn('filter="url(#glow)"', svg)
+        self.assertIn('stroke-width="3.2"', svg)
 
 
 if __name__ == "__main__":
