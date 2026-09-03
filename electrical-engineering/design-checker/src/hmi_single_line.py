@@ -14,6 +14,7 @@ from .board_graph import BoardElectricalGraph, ElectricalNode, validate_board_gr
 _LINE = "#9bb0c8"
 _LINE_DIM = "#57708d"
 _STRUCTURAL = "#d7e5f4"
+_STRUCTURAL_SPINE = "#79d0ff"
 _TEXT = "#e8f2ff"
 _TEXT_DIM = "#7891ad"
 _ACCENT = "#39aef7"
@@ -91,18 +92,18 @@ def _line(
     width: float = 2.0,
     structural: bool = False,
 ) -> str:
-    stroke = _ACCENT if active else (_STRUCTURAL if structural else _LINE_DIM)
+    stroke = _ACCENT if active else (_STRUCTURAL_SPINE if structural else _LINE_DIM)
     glow = ' filter="url(#glow)"' if active else ""
     if structural:
         # Structural feeders are deliberately drawn as a two-layer non-scaling stroke.
         # This keeps source/incomer/field spines visible even when a very wide SVG is
         # displayed inside a narrower browser viewport.
         foreground = max(width, 7.0)
-        underlay = foreground + 5.0
+        underlay = foreground + 3.0
         return (
             f'<g data-role="structural-spine">'
             f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="#03101c" stroke-width="{underlay:g}" stroke-linecap="round" '
+            f'stroke="#10283a" stroke-width="{underlay:g}" stroke-linecap="round" '
             f'vector-effect="non-scaling-stroke"/>'
             f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
             f'stroke="{stroke}" stroke-width="{foreground:g}" stroke-linecap="round" '
