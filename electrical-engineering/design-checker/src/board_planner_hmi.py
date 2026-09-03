@@ -13,7 +13,9 @@ from .board_planner_state import (
     planner_owned_payload,
     remove_planner_branch_tree,
 )
+from .board_review_navigation import branch_uid_for_route_id
 from .connection import connection_options_for_phase
+from .design_review import DesignReviewSummary, design_review_summary
 from .hmi_planner_workspace import (
     _CSS,
     _allowed_additions,
@@ -37,6 +39,8 @@ _LAYOUT_CSS = r"""
 .bp-diagram-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:1rem 0 .45rem;padding:.55rem .7rem;border:1px solid #213a57;border-radius:8px;background:linear-gradient(90deg,rgba(14,31,51,.98),rgba(9,23,39,.96))}
 .bp-diagram-title{font-size:.78rem;font-weight:760;color:#edf6ff;text-transform:uppercase;letter-spacing:.02em}.bp-diagram-sub{font-size:.64rem;color:#718aa7;margin-top:.08rem}.bp-diagram-mode{font-size:.61rem;color:#8fd1ff;border:1px solid rgba(54,167,255,.3);background:rgba(54,167,255,.07);border-radius:5px;padding:.22rem .45rem}
 .bp-save-note{font-size:.61rem;color:#78b99b;margin:.35rem 0 0}
+.bp-review-detail{border-left:3px solid #f7bf4f;background:rgba(247,191,79,.055);padding:.48rem .62rem;border-radius:0 7px 7px 0;margin-top:.55rem}.bp-review-detail strong{font-size:.68rem;color:#e7d29d}.bp-review-detail span{display:block;font-size:.63rem;color:#9d9276;line-height:1.4;margin-top:.12rem}
+.bp-review-empty{font-size:.66rem;color:#7895b6;padding:.32rem .05rem .08rem}
 </style>
 """
 
@@ -90,6 +94,29 @@ def _select(uid: str) -> None:
     st.rerun()
 
 
+def _event_rows(event) -> list[int]:
+    try:
+        return list(event.selection.rows)
+    except (AttributeError, TypeError):
+        if isinstance(event, dict):
+            return list(event.get("selection", {}).get("rows", []))
+    return []
+
+
+def _focus_route(board: dict, route_circuit_id: str | None) -> None:
+    route = str(route_circuit_id or "").strip()
+    if not route:
+        return
+    branch_uid = branch_uid_for_route_id(board, route)
+    changed = st.session_state.get("bp_hmi_focus_circuit_id") != route
+    st.session_state["bp_hmi_focus_circuit_id"] = route
+    if branch_uid is not None:
+        changed = changed or st.session_state.get("bp_hmi_selected_uid") != branch_uid
+        st.session_state["bp_hmi_selected_uid"] = branch_uid
+    if changed:
+        st.rerun()
+
+
 def _hierarchy_item(branch: dict, branches: list[dict]) -> None:
     uid = str(branch.get("uid"))
     kind = str(branch.get("kind", "final"))
@@ -136,13 +163,15 @@ def _render_hierarchy(board_id: str, branches: list[dict]) -> None:
         _hierarchy_item(branch, branches)
 
 
-def _render_schedule(calculated) -> None:
+def _render_schedule(board: dict, calculated) -> None:
     _panel_header("Circuit schedule", "Select one row to trace its complete electrical route.", "LIVE")
+    focus = st.session_state.get("bp_hmi_focus_circuit_id")
     schedule = []
     if calculated is not None:
         for context in calculated.circuit_contexts:
             schedule.append(
                 {
+                    "Focus": "●" if context.circuit_id == focus else "",
                     "Circuit": context.circuit_id,
                     "Ib": _fmt_a(context.design_current_a),
                     "Breaker": _fmt_rating(context.breaker_candidate_a),
@@ -150,7 +179,7 @@ def _render_schedule(calculated) -> None:
                 }
             )
     st.markdown(
-        '<div class="bp-schedule-help">The table is the fast way to locate a circuit on large boards.</div>',
+        '<div class="bp-schedule-help">The active route is marked here whether it was selected from the schedule or Design review.</div>',
         unsafe_allow_html=True,
     )
     event = st.dataframe(
@@ -162,21 +191,78 @@ def _render_schedule(calculated) -> None:
         selection_mode="single-row",
         key="bp_hmi_schedule_select",
     )
-    rows = []
-    try:
-        rows = list(event.selection.rows)
-    except (AttributeError, TypeError):
-        if isinstance(event, dict):
-            rows = list(event.get("selection", {}).get("rows", []))
-    focus = st.session_state.get("bp_hmi_focus_circuit_id")
+    rows = _event_rows(event)
     if rows and 0 <= rows[0] < len(schedule):
-        clicked = str(schedule[rows[0]]["Circuit"])
-        if clicked != focus:
-            st.session_state["bp_hmi_focus_circuit_id"] = clicked
-            st.rerun()
-    elif not rows and focus is not None:
-        st.session_state["bp_hmi_focus_circuit_id"] = None
-        st.rerun()
+        _focus_route(board, str(schedule[rows[0]]["Circuit"]))
+
+
+def _render_review_panel(board: dict, review: DesignReviewSummary) -> None:
+    total = len(review.issues)
+    badge = f"{review.attention_count} ATTENTION · {review.limitation_count} LIMITATIONS"
+    with st.container(border=True):
+        _panel_header(
+            "Design review",
+            "Planning issues and known model limitations. Selecting a row focuses its route in the schedule and single-line.",
+            badge,
+        )
+        filter_col, clear_col, note_col = st.columns([1.15, 0.9, 4.0], gap="small")
+        with filter_col:
+            review_filter = st.selectbox(
+                "Show",
+                ["All", "Attention", "Limitations"],
+                key="bp_review_filter",
+            )
+        with clear_col:
+            st.caption("Route navigation")
+            if st.button("Clear review focus", use_container_width=True, key="bp_review_clear"):
+                st.session_state["bp_hmi_focus_circuit_id"] = None
+                st.session_state["bp_hmi_selected_uid"] = "root"
+                st.rerun()
+        with note_col:
+            st.caption(
+                f"{total} current review items. These are planning outputs/scope notes, not protection-verification results."
+            )
+
+        visible = [
+            issue
+            for issue in review.issues
+            if review_filter == "All"
+            or (review_filter == "Attention" and issue.severity == "ATTENTION")
+            or (review_filter == "Limitations" and issue.severity == "LIMITATION")
+        ]
+        if not visible:
+            st.markdown(
+                '<div class="bp-review-empty">No items in this review filter. Other engineering checks remain separate.</div>',
+                unsafe_allow_html=True,
+            )
+            return
+
+        rows = [
+            {
+                "Severity": issue.severity,
+                "Target": issue.target_id,
+                "Scope": issue.scope.replace("_", " ").title(),
+                "Issue": issue.title,
+            }
+            for issue in visible
+        ]
+        event = st.dataframe(
+            rows,
+            use_container_width=True,
+            hide_index=True,
+            height=min(330, 74 + 34 * len(rows)),
+            on_select="rerun",
+            selection_mode="single-row",
+            key="bp_design_review_select",
+        )
+        selected_rows = _event_rows(event)
+        if selected_rows and 0 <= selected_rows[0] < len(visible):
+            issue = visible[selected_rows[0]]
+            st.markdown(
+                f'<div class="bp-review-detail"><strong>{escape(issue.target_id)} · {escape(issue.title)}</strong><span>{escape(issue.detail)}</span></div>',
+                unsafe_allow_html=True,
+            )
+            _focus_route(board, issue.route_circuit_id)
 
 
 def _apply_and_save(board: dict) -> None:
@@ -348,17 +434,18 @@ def render_board_planner() -> None:
     board = st.session_state["bp_hmi_board"]
     branches = board.setdefault("branches", [])
     selected = _selected_branch(board)
-    focus_circuit_id = st.session_state.get("bp_hmi_focus_circuit_id")
 
     try:
         calculated = calculate_working_board(board)
         graph = calculated.graph
         root_plan = calculated.hierarchy.root.plan
+        review = design_review_summary(calculated)
         calculation_error = None
     except (TypeError, ValueError) as exc:
         calculated = None
         graph = None
         root_plan = None
+        review = None
         calculation_error = str(exc)
 
     board_id = str(board.get("board_id", "Board"))
@@ -405,15 +492,15 @@ def render_board_planner() -> None:
     max_phase = root_plan.phase_balance.max_phase_current_a if root_plan is not None else None
     incomer = root_plan.incomer_candidate.breaker_rating_a if root_plan is not None else None
     circuit_count = len(calculated.circuit_contexts) if calculated is not None else 0
-    unresolved = (
-        sum(1 for item in calculated.circuit_contexts if item.breaker_candidate_a is None or item.cable_mm2 is None)
-        if calculated is not None
-        else 0
-    )
+    attention_count = review.attention_count if review is not None else 0
+    limitation_count = review.limitation_count if review is not None else 0
     st.markdown(
-        f'<div class="bp-kpi-strip"><div class="bp-kpi"><div class="bp-kpi-label">Max phase demand</div><div class="bp-kpi-value">{_fmt_a(max_phase)}</div><div class="bp-kpi-foot">live hierarchy</div></div><div class="bp-kpi"><div class="bp-kpi-label">Incomer candidate</div><div class="bp-kpi-value">{_fmt_rating(incomer)}</div><div class="bp-kpi-foot">planning only</div></div><div class="bp-kpi"><div class="bp-kpi-label">Calculated branches</div><div class="bp-kpi-value">{circuit_count}</div><div class="bp-kpi-foot">feeders + final circuits</div></div><div class="bp-kpi"><div class="bp-kpi-label">Needs attention</div><div class="bp-kpi-value">{unresolved}</div><div class="bp-kpi-foot">current design scope</div></div></div>',
+        f'<div class="bp-kpi-strip"><div class="bp-kpi"><div class="bp-kpi-label">Max phase demand</div><div class="bp-kpi-value">{_fmt_a(max_phase)}</div><div class="bp-kpi-foot">live hierarchy</div></div><div class="bp-kpi"><div class="bp-kpi-label">Incomer candidate</div><div class="bp-kpi-value">{_fmt_rating(incomer)}</div><div class="bp-kpi-foot">planning only</div></div><div class="bp-kpi"><div class="bp-kpi-label">Calculated branches</div><div class="bp-kpi-value">{circuit_count}</div><div class="bp-kpi-foot">feeders + final circuits</div></div><div class="bp-kpi"><div class="bp-kpi-label">Needs attention</div><div class="bp-kpi-value">{attention_count}</div><div class="bp-kpi-foot">{limitation_count} limitations tracked separately</div></div></div>',
         unsafe_allow_html=True,
     )
+
+    if review is not None:
+        _render_review_panel(board, review)
 
     hierarchy_col, schedule_col, properties_col = st.columns([1.0, 1.65, 1.25], gap="small")
     with hierarchy_col:
@@ -421,7 +508,7 @@ def render_board_planner() -> None:
             _render_hierarchy(board_id, branches)
     with schedule_col:
         with st.container(border=True):
-            _render_schedule(calculated)
+            _render_schedule(board, calculated)
     with properties_col:
         with st.container(border=True):
             _render_properties(board, calculated)

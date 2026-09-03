@@ -9,6 +9,7 @@ class BoardPlannerUITests(unittest.TestCase):
         cls.page = (root / "pages" / "3_Board_Planner.py").read_text(encoding="utf-8")
         cls.hmi = (root / "src" / "board_planner_hmi.py").read_text(encoding="utf-8")
         cls.state = (root / "src" / "board_planner_state.py").read_text(encoding="utf-8")
+        cls.review_navigation = (root / "src" / "board_review_navigation.py").read_text(encoding="utf-8")
 
     def test_production_page_uses_hmi_workbench_and_shared_baseline(self):
         self.assertIn("render_board_planner", self.page)
@@ -76,17 +77,36 @@ class BoardPlannerUITests(unittest.TestCase):
         self.assertIn('"bp_hmi_focus_circuit_id"', self.hmi)
         self.assertIn("_route_graph_nodes", self.hmi)
         self.assertIn('selection_title = f"Route focus · {focus_circuit_id}"', self.hmi)
+        self.assertIn('"Focus": "●" if context.circuit_id == focus else ""', self.hmi)
+        self.assertNotIn("elif not rows and focus is not None", self.hmi)
+
+    def test_design_review_uses_backend_summary_not_ad_hoc_blank_count(self):
+        self.assertIn("design_review_summary", self.hmi)
+        self.assertIn("review.attention_count", self.hmi)
+        self.assertIn("review.limitation_count", self.hmi)
+        self.assertIn('"Design review"', self.hmi)
+        self.assertNotIn("sum(1 for item in calculated.circuit_contexts if item.breaker_candidate_a is None", self.hmi)
+
+    def test_review_row_focuses_schedule_sld_and_editable_branch(self):
+        self.assertIn("branch_uid_for_route_id", self.hmi)
+        self.assertIn("_focus_route(board, issue.route_circuit_id)", self.hmi)
+        self.assertIn('st.session_state["bp_hmi_selected_uid"] = branch_uid', self.hmi)
+        self.assertIn('key="bp_design_review_select"', self.hmi)
+        self.assertIn('"Clear review focus"', self.hmi)
+        self.assertIn("circuit_id", self.review_navigation)
+        self.assertIn("feeder_id", self.review_navigation)
 
     def test_selected_subtree_can_be_removed(self):
         self.assertIn("remove_planner_branch_tree", self.hmi)
         self.assertIn('"Remove selected item"', self.hmi)
         self.assertIn("board[\"branches\"]", self.state)
 
-    def test_live_kpis_surface_board_demand_and_unresolved_scope(self):
+    def test_live_kpis_surface_board_demand_and_review_scope(self):
         self.assertIn("Max phase demand", self.hmi)
         self.assertIn("Incomer candidate", self.hmi)
         self.assertIn("Calculated branches", self.hmi)
         self.assertIn("Needs attention", self.hmi)
+        self.assertIn("limitations tracked separately", self.hmi)
 
     def test_production_ui_keeps_protection_claims_out_of_planner(self):
         self.assertNotIn("VERIFIED", self.hmi)
