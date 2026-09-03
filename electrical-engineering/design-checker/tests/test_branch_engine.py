@@ -51,8 +51,9 @@ class FinalBranchDesignTests(unittest.TestCase):
         self.assertEqual(result.connection.id, "general_socket_16a_1ph")
         self.assertEqual(result.connection_rating_a, 16.0)
         self.assertEqual(result.breaker_a, 16.0)
-        self.assertIsNone(result.cable_mm2)
-        self.assertEqual(result.circuit.verification.scope_status, "PARTIAL_SCOPE")
+        self.assertEqual(result.cable_mm2, 1.5)
+        self.assertEqual(result.circuit.verification.scope_status, "SUPPORTED_SCOPE")
+        self.assertFalse(result.circuit.verification.blocking_issues)
 
     def test_manual_mode_rejects_phase_mismatch_and_unrated_fixed_connection(self):
         with self.assertRaisesRegex(ValueError, "phase does not match"):

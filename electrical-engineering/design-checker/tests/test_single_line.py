@@ -58,7 +58,7 @@ class SingleLineDiagramTests(unittest.TestCase):
         self.assertEqual(cable.cable_runs, row.cable_runs)
         self.assertEqual(by_id["DB-02:C-01:load"].label, "AHU")
 
-    def test_sld_keeps_unverified_single_phase_cable_explicit(self):
+    def test_sld_shows_source_backed_single_phase_cable_candidate(self):
         plan = calculate_board_plan(BoardPlanRequest(
             board_id="DB-03",
             description="Single phase scope board",
@@ -67,10 +67,11 @@ class SingleLineDiagramTests(unittest.TestCase):
         sld = build_single_line_diagram(plan)
         by_id = {node.node_id: node for node in sld.nodes}
         cable = by_id["DB-03:C-01:cable"]
-        self.assertEqual(cable.label, "Cable sizing not verified")
-        self.assertIsNone(cable.cable_mm2)
-        self.assertEqual(cable.scope_status, "PARTIAL_SCOPE")
-        self.assertIn("cable_dataset_phase_unsupported", cable.issue_codes)
+        self.assertEqual(cable.label, "1 × 1.5 mm² Copper")
+        self.assertEqual(cable.cable_mm2, 1.5)
+        self.assertEqual(cable.cable_runs, 1)
+        self.assertEqual(cable.scope_status, "SUPPORTED_SCOPE")
+        self.assertNotIn("cable_dataset_phase_unsupported", cable.issue_codes)
 
     def test_sld_does_not_claim_incomer_or_busbar_verification(self):
         plan = calculate_board_plan(BoardPlanRequest(

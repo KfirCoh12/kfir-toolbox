@@ -6,48 +6,33 @@ from src.working_board_plan import calculate_working_board
 
 
 class DesignReviewTests(unittest.TestCase):
-    def test_office_fixture_turns_current_unresolved_scope_into_targeted_issues(self):
+    def test_office_fixture_resolves_final_circuit_cable_attention(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
         summary = design_review_summary(calculated)
 
-        # The fixture has 27 single-phase final circuits. Their design currents and
-        # breaker candidates are calculated, while automatic cable selection remains
-        # outside the current single-phase dataset.
-        self.assertEqual(summary.attention_count, 27)
+        # The 27 single-phase final circuits now receive source-backed Method E
+        # two-loaded-conductor cable candidates. The remaining review records are
+        # field-level limitations around mixed single-phase feeder neutral/harmonics.
+        self.assertEqual(summary.attention_count, 0)
         self.assertEqual(summary.limitation_count, 3)
-        self.assertEqual(len(summary.issues), 30)
-
-        gp01 = summary.issues_by_target["GP-01"]
-        self.assertEqual(len(gp01), 1)
-        self.assertEqual(gp01[0].code, "SINGLE_PHASE_CABLE_SCOPE")
-        self.assertEqual(gp01[0].severity, "ATTENTION")
-        self.assertEqual(gp01[0].route_circuit_id, "GP-01")
-
+        self.assertEqual(len(summary.issues), 3)
+        self.assertNotIn("GP-01", summary.issues_by_target)
+        self.assertNotIn("AV-03", summary.issues_by_target)
         self.assertNotIn("HVAC-01", summary.issues_by_target)
 
-    def test_repeated_issue_types_are_grouped_without_losing_targets(self):
+    def test_remaining_office_review_groups_only_field_scope_limitations(self):
         summary = design_review_summary(
             calculate_working_board(office_700m2_150_people_board())
         )
-        self.assertEqual(len(summary.groups), 2)
+        self.assertEqual(len(summary.groups), 1)
 
-        single_phase = next(
-            group for group in summary.groups if group.code == "SINGLE_PHASE_CABLE_SCOPE"
-        )
-        self.assertEqual(single_phase.severity, "ATTENTION")
-        self.assertEqual(single_phase.scope, "FINAL_CIRCUIT")
-        self.assertEqual(single_phase.target_count, 27)
-        self.assertEqual(len(single_phase.target_ids), 27)
-        self.assertIn("GP-01", single_phase.target_ids)
-        self.assertIn("AV-03", single_phase.target_ids)
-
-        field_scope = next(
-            group
-            for group in summary.groups
-            if group.code == "FIELD_FEEDER_MIXED_SINGLE_PHASE_SCOPE"
-        )
+        field_scope = summary.groups[0]
+        self.assertEqual(field_scope.code, "FIELD_FEEDER_MIXED_SINGLE_PHASE_SCOPE")
         self.assertEqual(field_scope.severity, "LIMITATION")
+        self.assertEqual(field_scope.scope, "FIELD_FEEDER")
         self.assertEqual(field_scope.target_count, 3)
+        self.assertEqual(len(field_scope.target_ids), 3)
+        self.assertIn("F-GP", field_scope.target_ids)
 
     def test_mixed_single_phase_field_is_limitation_not_failure(self):
         calculated = calculate_working_board(office_700m2_150_people_board())

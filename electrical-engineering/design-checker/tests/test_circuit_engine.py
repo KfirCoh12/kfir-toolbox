@@ -56,7 +56,7 @@ class CircuitEngineTests(unittest.TestCase):
         self.assertIsNotNone(r.voltage_drop_percent)
         self.assertEqual(r.selection.voltage_drop.comparison, "PASS")
 
-    def test_single_phase_preserves_partial_scope_in_structured_result(self):
+    def test_single_phase_uses_two_loaded_conductor_ampacity_path(self):
         r = calculate_circuit_design(CircuitDesignRequest(
             circuit_id="C-04",
             description="Single-phase appliance",
@@ -66,9 +66,14 @@ class CircuitEngineTests(unittest.TestCase):
             phase="single",
             power_factor=0.9,
         ))
-        self.assertEqual(r.verification.scope_status, "PARTIAL_SCOPE")
-        self.assertIsNone(r.cable_mm2)
-        self.assertTrue(r.verification.blocking_issues)
+        self.assertEqual(r.verification.scope_status, "SUPPORTED_SCOPE")
+        self.assertEqual(r.breaker_a, 25.0)
+        self.assertEqual(r.cable_mm2, 1.5)
+        self.assertEqual(r.cable_runs, 1)
+        self.assertFalse(r.verification.blocking_issues)
+        self.assertTrue(
+            any("harmonic-rich neutral loading" in item for item in r.selection.limitations)
+        )
 
     def test_circuit_identity_is_required(self):
         with self.assertRaises(ValueError):

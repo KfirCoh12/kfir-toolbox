@@ -61,7 +61,7 @@ class BoardPlannerTests(unittest.TestCase):
         self.assertIsNotNone(rows[0].cable_mm2)
         self.assertEqual(rows[0].scope_status, "SUPPORTED_SCOPE")
 
-    def test_schedule_row_exposes_blocking_issue_codes(self):
+    def test_schedule_row_exposes_supported_single_phase_cable_candidate(self):
         r = calculate_board_plan(BoardPlanRequest(
             board_id="DB-01B",
             description="Single phase scope test",
@@ -70,8 +70,9 @@ class BoardPlannerTests(unittest.TestCase):
         row = r.schedule_rows[0]
         self.assertEqual(row.assigned_phase, "L1")
         self.assertFalse(row.phase_locked)
-        self.assertEqual(row.scope_status, "PARTIAL_SCOPE")
-        self.assertIn("cable_dataset_phase_unsupported", row.blocking_issue_codes)
+        self.assertEqual(row.scope_status, "SUPPORTED_SCOPE")
+        self.assertEqual(row.cable_mm2, 1.5)
+        self.assertEqual(row.blocking_issue_codes, tuple())
 
     def test_three_phase_circuit_contributes_equally_to_all_phases(self):
         r = calculate_board_plan(BoardPlanRequest(
@@ -240,7 +241,7 @@ class BoardPlannerTests(unittest.TestCase):
                 line_to_line_voltage_v=float("nan"),
             ))
 
-    def test_board_exposes_circuits_with_blocking_scope_issues(self):
+    def test_mixed_board_has_no_blocking_scope_issue_from_single_phase_ampacity(self):
         r = calculate_board_plan(BoardPlanRequest(
             board_id="DB-02",
             description="Mixed board",
@@ -249,8 +250,10 @@ class BoardPlannerTests(unittest.TestCase):
                 self._circuit("C-02", "Single-phase load", phase="single", load_kw=3),
             ),
         ))
-        self.assertEqual(r.scope_status, "PARTIAL_SCOPE")
-        self.assertEqual(r.blocking_circuit_ids, ("C-02",))
+        self.assertEqual(r.scope_status, "SUPPORTED_SCOPE")
+        self.assertEqual(r.blocking_circuit_ids, tuple())
+        row = next(item for item in r.schedule_rows if item.circuit_id == "C-02")
+        self.assertEqual(row.cable_mm2, 1.5)
 
     def test_duplicate_circuit_ids_are_rejected(self):
         with self.assertRaises(ValueError):

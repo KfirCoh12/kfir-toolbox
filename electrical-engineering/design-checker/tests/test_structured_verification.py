@@ -45,7 +45,7 @@ class StructuredVerificationTests(unittest.TestCase):
         self.assertIn("connection_configuration_not_verified", codes)
         self.assertFalse(any(issue.code == "automatic_selection_not_verified" for issue in summary.issues))
 
-    def test_single_phase_forward_result_is_partial_scope_with_cable_dataset_blocker(self):
+    def test_single_phase_forward_result_has_supported_ampacity_scope_without_compliance_claim(self):
         result = select_circuit(CircuitSelectionInput(
             load_type="kw",
             load_value=5,
@@ -54,9 +54,16 @@ class StructuredVerificationTests(unittest.TestCase):
             power_factor=0.9,
         ))
         summary = summarize_circuit_selection_verification(result)
-        self.assertEqual(summary.scope_status, "PARTIAL_SCOPE")
-        blockers = {issue.code for issue in summary.blocking_issues}
-        self.assertIn("cable_dataset_phase_unsupported", blockers)
+        self.assertEqual(result.status, "SUGGESTION")
+        self.assertEqual(result.suggested_cable_mm2, 1.5)
+        self.assertEqual(summary.scope_status, "SUPPORTED_SCOPE")
+        self.assertFalse(summary.blocking_issues)
+        codes = {issue.code for issue in summary.issues}
+        self.assertIn("protection_standard_not_implemented", codes)
+        self.assertNotIn("cable_dataset_phase_unsupported", codes)
+        self.assertTrue(
+            any("harmonic-rich neutral loading" in item for item in result.limitations)
+        )
 
     def test_parallel_sharing_guard_has_stable_issue_code(self):
         result = select_circuit(CircuitSelectionInput(

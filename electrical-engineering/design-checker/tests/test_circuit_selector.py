@@ -22,10 +22,14 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertGreater(base.suggested_cable_mm2,10.0)
         self.assertEqual(base.voltage_drop.comparison,"PASS")
 
-    def test_single_phase_is_explicitly_not_yet_supported_for_auto_cable_selection(self):
+    def test_single_phase_uses_two_loaded_conductor_method_e_dataset(self):
         r=select_circuit(CircuitSelectionInput(load_type="kw",load_value=5,voltage_v=230,phase="single",power_factor=0.9))
-        self.assertEqual(r.status,"NOT VERIFIED")
-        self.assertIsNone(r.suggested_cable_mm2)
+        self.assertEqual(r.status,"SUGGESTION")
+        self.assertEqual(r.suggested_breaker_a,25.0)
+        self.assertEqual(r.suggested_cable_mm2,1.5)
+        self.assertEqual(r.cable_iz_a,26.0)
+        self.assertTrue(any("two loaded conductors" in x.lower() for x in r.trace))
+        self.assertTrue(any("harmonic-rich neutral loading" in x for x in r.limitations))
 
     def test_does_not_invent_size_outside_dataset(self):
         r=select_circuit(CircuitSelectionInput(load_type="a",load_value=600,voltage_v=400,phase="three",power_factor=0.9))
@@ -63,19 +67,16 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertNotIn("compliant", combined.lower())
         self.assertNotIn("verified protection", combined.lower())
 
-
     def test_unsupported_ambient_condition_is_not_misreported_as_no_solution(self):
         r=select_circuit(CircuitSelectionInput(load_type="a",load_value=60,voltage_v=400,phase="three",power_factor=0.9,ambient_temperature_c=55))
         self.assertEqual(r.status,"NOT VERIFIED")
         self.assertIsNone(r.suggested_cable_mm2)
-        self.assertTrue(any("ambient temperature" in x.lower() for x in r.limitations))
         self.assertTrue(any("ambient temperature" in x.lower() for x in r.limitations))
         self.assertEqual(r.rejected_candidates, tuple())
 
     def test_unsupported_group_count_is_reported_with_reason(self):
         r=select_circuit(CircuitSelectionInput(load_type="a",load_value=60,voltage_v=400,phase="three",power_factor=0.9,grouped_circuits=10,grouping_arrangement="bunched"))
         self.assertEqual(r.status,"NOT VERIFIED")
-        self.assertTrue(any("group count" in x.lower() for x in r.limitations))
         self.assertTrue(any("group count" in x.lower() for x in r.limitations))
         self.assertEqual(r.rejected_candidates, tuple())
 
@@ -119,6 +120,15 @@ class CircuitSelectorTests(unittest.TestCase):
         self.assertEqual(a.status, "SUPPORTED")
         self.assertIn("IEC reference Method E", a.supported_conditions)
         self.assertIn("ambient air temperature 30 °C", a.supported_conditions)
+        self.assertEqual(a.missing_or_unsupported, tuple())
+
+    def test_single_phase_preflight_reports_two_loaded_conductor_basis(self):
+        a = assess_installation_support(CircuitSelectionInput(
+            load_type="kw", load_value=5, voltage_v=230, phase="single", power_factor=0.9,
+            ambient_temperature_c=30, grouped_circuits=1,
+        ))
+        self.assertEqual(a.status, "SUPPORTED")
+        self.assertIn("two loaded conductors (phase + neutral)", a.supported_conditions)
         self.assertEqual(a.missing_or_unsupported, tuple())
 
     def test_installation_support_preflight_reports_unsupported_reason_before_iteration(self):

@@ -65,14 +65,15 @@ class BoardGraphTests(unittest.TestCase):
         self.assertEqual(enriched.node_by_id["C-02:load"].assigned_phase, "3P")
         self.assertEqual(enriched.node_by_id["C-02:device"].parent_id, "busbar")
 
-    def test_single_phase_unsupported_cable_stays_unverified_after_enrichment(self):
+    def test_single_phase_cable_candidate_is_enriched_without_losing_phase_assignment(self):
         graph = self._graph()
         result = calculate_board_plan(board_plan_request_from_graph(graph))
         enriched = enrich_graph_with_plan(graph, result)
         cable = enriched.node_by_id["C-01:cable"]
-        self.assertIsNone(cable.cable_mm2)
-        self.assertEqual(cable.scope_status, "PARTIAL_SCOPE")
-        self.assertIn("cable_dataset_phase_unsupported", cable.issue_codes)
+        self.assertEqual(cable.cable_mm2, 1.5)
+        self.assertEqual(cable.cable_runs, 1)
+        self.assertEqual(cable.scope_status, "SUPPORTED_SCOPE")
+        self.assertNotIn("cable_dataset_phase_unsupported", cable.issue_codes)
         self.assertEqual(enriched.node_by_id["C-01:load"].assigned_phase, "L2")
 
     def test_sub_board_feeder_builds_complete_nested_radial_hierarchy(self):
