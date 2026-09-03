@@ -27,6 +27,33 @@ class AmpacityLookupTests(unittest.TestCase):
         self.assertEqual(r.base_iz_a, 298.0)
         self.assertEqual(r.iz_a, 298.0)
 
+    def test_two_loaded_copper_method_e_reference_condition(self):
+        r = calculate_supported_iz(self._base(
+            cross_section_mm2=1.5,
+            loaded_conductors=2,
+            neutral_loaded=True,
+        ))
+        self.assertEqual(r.status, "IEC 60364-5-52:2009 BASE-EDITION VERIFIED")
+        self.assertEqual(r.base_iz_a, 26.0)
+        self.assertEqual(r.iz_a, 26.0)
+        self.assertTrue(any("two loaded conductors" in line for line in r.trace))
+
+    def test_two_loaded_aluminium_method_e_reference_condition(self):
+        r = calculate_supported_iz(self._base(
+            material="aluminium",
+            cross_section_mm2=2.5,
+            loaded_conductors=2,
+            neutral_loaded=True,
+        ))
+        self.assertEqual(r.base_iz_a, 28.0)
+        self.assertEqual(r.iz_a, 28.0)
+
+    def test_loaded_conductor_count_outside_verified_slice_is_not_guessed(self):
+        r = calculate_supported_iz(self._base(loaded_conductors=4))
+        self.assertEqual(r.status, "NOT VERIFIED")
+        self.assertIsNone(r.iz_a)
+        self.assertTrue(any("two or three loaded conductors" in x for x in r.missing_or_unsupported))
+
     def test_ambient_temperature_correction(self):
         r = calculate_supported_iz(self._base(ambient_temperature_c=40))
         self.assertAlmostEqual(r.iz_a, 298.0 * 0.91)
