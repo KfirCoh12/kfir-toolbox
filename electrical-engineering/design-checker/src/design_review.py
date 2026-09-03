@@ -18,7 +18,6 @@ DesignReviewScope = Literal["FINAL_CIRCUIT", "FIELD_FEEDER", "SUB_BOARD_FEEDER"]
 DesignReviewCode = Literal[
     "BREAKER_CANDIDATE_UNAVAILABLE",
     "CABLE_CANDIDATE_UNAVAILABLE",
-    "SINGLE_PHASE_CABLE_SCOPE",
     "FIELD_FEEDER_BREAKER_UNAVAILABLE",
     "FIELD_FEEDER_CABLE_UNAVAILABLE",
     "FIELD_FEEDER_MIXED_SINGLE_PHASE_SCOPE",
@@ -146,30 +145,17 @@ def _final_branch_issues(calculated: CalculatedWorkingBoard) -> list[DesignRevie
                 )
             )
         if result.cable_mm2 is None:
-            if result.request.phase == "single":
-                issues.append(
-                    _issue(
-                        "SINGLE_PHASE_CABLE_SCOPE",
-                        "ATTENTION",
-                        "FINAL_CIRCUIT",
-                        circuit_id,
-                        "Single-phase cable sizing needs input/model support",
-                        "Automatic cable selection is outside the current single-phase cable dataset. The circuit current and breaker candidate remain separate planning outputs.",
-                        route_circuit_id=circuit_id,
-                    )
+            issues.append(
+                _issue(
+                    "CABLE_CANDIDATE_UNAVAILABLE",
+                    "ATTENTION",
+                    "FINAL_CIRCUIT",
+                    circuit_id,
+                    "Cable candidate unresolved",
+                    "The declared circuit conditions did not produce a supported automatic cable candidate. No cable size is guessed.",
+                    route_circuit_id=circuit_id,
                 )
-            else:
-                issues.append(
-                    _issue(
-                        "CABLE_CANDIDATE_UNAVAILABLE",
-                        "ATTENTION",
-                        "FINAL_CIRCUIT",
-                        circuit_id,
-                        "Cable candidate unresolved",
-                        "The declared circuit conditions did not produce a supported automatic cable candidate. No cable size is guessed.",
-                        route_circuit_id=circuit_id,
-                    )
-                )
+            )
     return issues
 
 
