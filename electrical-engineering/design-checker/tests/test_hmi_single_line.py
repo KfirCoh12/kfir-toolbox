@@ -8,7 +8,7 @@ from src.working_board_plan import calculate_working_board
 
 
 class HmiSingleLineTests(unittest.TestCase):
-    def test_renderer_uses_line_symbols_and_context_labels(self):
+    def test_renderer_uses_compact_labels_and_hover_detail(self):
         graph = make_radial_board_graph(
             board_id="DB-01",
             description="Test board",
@@ -28,10 +28,12 @@ class HmiSingleLineTests(unittest.TestCase):
         svg = render_hmi_single_line_svg(graph)
         self.assertIn("<svg", svg)
         self.assertIn("Main busbar", svg)
-        self.assertIn("C-01 protection", svg)
-        self.assertIn("Test load", svg)
-        self.assertIn("<rect", svg)
-        self.assertIn("<line", svg)
+        self.assertIn('data-circuit-id="C-01"', svg)
+        self.assertIn("<title>C-01 · Test load", svg)
+        self.assertIn(">C-01</text>", svg)
+        self.assertIn("10 kW · 3P", svg)
+        self.assertNotIn("rotate(-90", svg)
+        self.assertIn('text-rendering="geometricPrecision"', svg)
         self.assertIn('data-role="busbar-rail"', svg)
         self.assertIn('data-role="structural-spine"', svg)
         self.assertIn('vector-effect="non-scaling-stroke"', svg)
@@ -46,7 +48,7 @@ class HmiSingleLineTests(unittest.TestCase):
         svg = render_hmi_single_line_svg(graph, selected_node_ids=("incomer",))
         self.assertIn("#39aef7", svg)
 
-    def test_selected_circuit_path_uses_glow_and_accent_geometry(self):
+    def test_selected_circuit_path_uses_glow_and_full_load_description(self):
         graph = make_radial_board_graph(
             board_id="DB-01",
             description="Test board",
@@ -67,9 +69,11 @@ class HmiSingleLineTests(unittest.TestCase):
         svg = render_hmi_single_line_svg(graph, selected_node_ids=selected)
         self.assertIn("#39aef7", svg)
         self.assertIn('filter="url(#glow)"', svg)
-        self.assertIn("C-01 protection", svg)
+        self.assertIn(">C-01</text>", svg)
+        self.assertIn(">Test load</text>", svg)
+        self.assertNotIn("rotate(-90", svg)
 
-    def test_large_office_board_keeps_readable_intrinsic_width_and_explicit_structure(self):
+    def test_large_office_board_keeps_readable_spacing_and_explicit_structure(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
         graph = calculated.graph
         root_selected = tuple(
@@ -81,11 +85,11 @@ class HmiSingleLineTests(unittest.TestCase):
 
         width_match = re.search(r'<svg[^>]* width="(\d+)"', svg)
         self.assertIsNotNone(width_match)
-        self.assertGreater(int(width_match.group(1)), 3000)
+        self.assertGreater(int(width_match.group(1)), 5000)
         self.assertIn("FIELD-GP busbar", svg)
-        self.assertIn("GP-01 protection", svg)
+        self.assertIn('data-circuit-id="GP-01"', svg)
         self.assertIn("Open-office socket zone 01", svg)
-        self.assertIn("rotate(-90", svg)
+        self.assertNotIn("rotate(-90", svg)
         self.assertGreaterEqual(svg.count('data-role="structural-spine"'), 10)
         self.assertGreaterEqual(svg.count('vector-effect="non-scaling-stroke"'), 20)
         self.assertIn('data-role="field-junction"', svg)
@@ -102,8 +106,9 @@ class HmiSingleLineTests(unittest.TestCase):
 
         svg = render_hmi_single_line_svg(graph, selected_node_ids=tuple(selected_ids))
         self.assertIn("FIELD-GP busbar", svg)
-        self.assertIn("GP-01 protection", svg)
-        self.assertNotIn("GP-02 protection", svg)
+        self.assertIn('data-circuit-id="GP-01"', svg)
+        self.assertNotIn('data-circuit-id="GP-02"', svg)
+        self.assertIn("Open-office socket zone 01", svg)
         self.assertIn('filter="url(#glow)"', svg)
         self.assertIn('data-role="structural-spine"', svg)
         self.assertIn('vector-effect="non-scaling-stroke"', svg)
