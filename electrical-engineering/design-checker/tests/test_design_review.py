@@ -25,6 +25,30 @@ class DesignReviewTests(unittest.TestCase):
 
         self.assertNotIn("HVAC-01", summary.issues_by_target)
 
+    def test_repeated_issue_types_are_grouped_without_losing_targets(self):
+        summary = design_review_summary(
+            calculate_working_board(office_700m2_150_people_board())
+        )
+        self.assertEqual(len(summary.groups), 2)
+
+        single_phase = next(
+            group for group in summary.groups if group.code == "SINGLE_PHASE_CABLE_SCOPE"
+        )
+        self.assertEqual(single_phase.severity, "ATTENTION")
+        self.assertEqual(single_phase.scope, "FINAL_CIRCUIT")
+        self.assertEqual(single_phase.target_count, 27)
+        self.assertEqual(len(single_phase.target_ids), 27)
+        self.assertIn("GP-01", single_phase.target_ids)
+        self.assertIn("AV-03", single_phase.target_ids)
+
+        field_scope = next(
+            group
+            for group in summary.groups
+            if group.code == "FIELD_FEEDER_MIXED_SINGLE_PHASE_SCOPE"
+        )
+        self.assertEqual(field_scope.severity, "LIMITATION")
+        self.assertEqual(field_scope.target_count, 3)
+
     def test_mixed_single_phase_field_is_limitation_not_failure(self):
         calculated = calculate_working_board(office_700m2_150_people_board())
         summary = design_review_summary(calculated)
