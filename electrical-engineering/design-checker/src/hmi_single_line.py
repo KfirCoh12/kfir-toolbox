@@ -96,7 +96,12 @@ def _subtree_node_ids(graph: BoardElectricalGraph, node: ElectricalNode) -> set[
 
 
 def _branch_has_selection(graph: BoardElectricalGraph, device: ElectricalNode, selected_ids: set[str]) -> bool:
-    return bool(_subtree_node_ids(graph, device) & selected_ids)
+    """Treat equipment selection as focus, but not passive busbar/incomer context."""
+    for node_id in _subtree_node_ids(graph, device) & selected_ids:
+        node = graph.node_by_id.get(node_id)
+        if node is not None and node.kind not in ("busbar", "incomer"):
+            return True
+    return False
 
 
 def _visible_branch_data(graph: BoardElectricalGraph, busbar: ElectricalNode, selected_ids: set[str]):
@@ -144,7 +149,6 @@ def _draw_busbar(svg: list[str], graph: BoardElectricalGraph, busbar: Electrical
     branch_data, has_active = _visible_branch_data(graph, busbar, selected_ids)
     if not branch_data:
         return
-
     counts = []
     for _, _, _, child_busbar in branch_data:
         counts.append(_visible_leaf_count(graph, child_busbar, selected_ids) if child_busbar is not None and has_active else 1)
@@ -219,13 +223,11 @@ def render_hmi_single_line_svg(graph: BoardElectricalGraph, *, selected_node_ids
     source_active = source.node_id in selected_ids
     incomer_active = incomer is not None and incomer.node_id in selected_ids
     busbar_active = busbar is not None and busbar.node_id in selected_ids
-
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="100%" height="100%" preserveAspectRatio="xMidYMin meet">',
         '<defs><filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter><pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M 28 0 L 0 0 0 28" fill="none" stroke="#18314b" stroke-width="0.6" opacity="0.18"/></pattern></defs>',
         '<rect width="100%" height="100%" fill="#08131f"/><rect width="100%" height="100%" fill="url(#grid)"/>',
     ]
-
     source_stroke = _ACCENT if source_active else _LINE
     source_glow = ' filter="url(#glow)"' if source_active else ""
     svg.append(f'<circle cx="{cx:.1f}" cy="35" r="17" fill="#0a1727" stroke="{source_stroke}" stroke-width="2"{source_glow}/>')
