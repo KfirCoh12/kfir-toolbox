@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -128,18 +129,18 @@ def _response_text(response) -> str:
     return "\n\n".join(chunks).strip()
 
 
-def _safe_tool_result(name: str, arguments: dict) -> dict:
+def _safe_tool_result(name: str, arguments: dict, *, path: Path | None = None) -> dict:
     if name not in _MODEL_TOOL_NAMES:
         return {"ok": False, "error": f"Tool {name!r} is not available to the model."}
     try:
-        result = execute_planner_tool(name, arguments)
+        result = execute_planner_tool(name, arguments, path=path)
     except (OSError, TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "result": result}
 
 
-def _current_project_context() -> str:
-    snapshot = get_project()
+def _current_project_context(*, path: Path | None = None) -> str:
+    snapshot = get_project(path=path)
     return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -164,6 +165,7 @@ def run_assistant_turn(
     *,
     previous_response_id: str | None = None,
     client=None,
+    path: Path | None = None,
 ) -> AssistantTurnResult:
     """Run one conversational turn, including any Planner tool-call round trips."""
     message = str(user_message).strip()
@@ -179,7 +181,7 @@ def run_assistant_turn(
             raise RuntimeError("The OpenAI Python package is not installed") from exc
         client = OpenAI()
 
-    current_context = _current_project_context()
+    current_context = _current_project_context(path=path)
     first_input = (
         "CURRENT PLANNER PROJECT SNAPSHOT (authoritative at start of this turn):\n"
         + current_context
@@ -231,7 +233,7 @@ def run_assistant_turn(
                 if not isinstance(arguments, dict):
                     result = {"ok": False, "error": "Tool arguments must decode to an object."}
                 else:
-                    result = _safe_tool_result(name, arguments)
+                    result = _safe_tool_result(name, arguments, path=path)
             tool_outputs.append(
                 {
                     "type": "function_call_output",
