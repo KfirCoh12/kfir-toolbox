@@ -70,9 +70,18 @@ class UIScopeTests(unittest.TestCase):
         self.assertIn("BREAKER_RATINGS_A", section)
         self.assertIn("index=BREAKER_RATINGS_A.index(63)", section)
         breaker_block = section.split('"Breaker rating In (A)"', 1)[1].split(
-            "material =", 1
+            'st.markdown("#### Electrical system")', 1
         )[0]
         self.assertNotIn("st.number_input", breaker_block)
+
+    def test_existing_capacity_routes_single_phase_cable_to_two_loaded_dataset(self):
+        section = self.text.split(
+            'st.subheader("Existing supply capacity")', 1
+        )[1]
+        self.assertIn('source_inputs(phase, "cap_")', section)
+        self.assertIn('loaded_conductors = 2 if phase == "single" else 3', self.text)
+        self.assertIn('neutral_loaded=phase == "single"', self.text)
+        self.assertIn('if phase == "three":\n        source_options.append("NHXH FE180/E90 · Manufacturer")', self.text)
 
     def test_existing_capacity_hides_stale_results_after_input_changes(self):
         section = self.text.split(
@@ -149,10 +158,10 @@ class UIScopeTests(unittest.TestCase):
         self.assertIn("phase=phase", design)
         self.assertNotIn('phase="three"', design)
         self.assertIn(
-            "Automatic cable sizing remains NOT VERIFIED",
+            "Method E two-loaded-conductor",
             design,
         )
-        self.assertIn("three loaded conductors only", design)
+        self.assertIn("Harmonic-rich neutral loading", design)
 
     def test_design_support_preflight_uses_backend_before_calculation(self):
         design = self.text.split(
