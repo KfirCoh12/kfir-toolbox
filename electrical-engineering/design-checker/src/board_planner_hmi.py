@@ -27,6 +27,7 @@ from .hmi_planner_workspace import (
     _route_graph_nodes,
 )
 from .hmi_single_line import render_hmi_single_line_svg
+from .project_state import bump_project_revision
 from .ui_theme import apply_theme
 from .working_board_plan import calculate_working_board
 
@@ -64,9 +65,13 @@ def _fingerprint(board: dict) -> str:
 
 
 def _persist(board: dict) -> None:
+    """Persist a manual Planner edit and advance the shared project revision."""
+    revised = bump_project_revision(board)
+    board["project_state"] = deepcopy(revised["project_state"])
     payload = planner_owned_payload(board)
+    payload["project_state"] = deepcopy(board["project_state"])
     save_last_board(payload)
-    st.session_state["bp_hmi_source_fingerprint"] = repr(payload)
+    st.session_state["bp_hmi_source_fingerprint"] = repr(planner_owned_payload(board))
 
 
 def _ensure_live_state(saved: dict) -> None:
