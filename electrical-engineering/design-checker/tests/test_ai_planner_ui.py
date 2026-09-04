@@ -11,8 +11,8 @@ class AIPlannerUITests(unittest.TestCase):
     def test_page_requires_api_key_without_exposing_it(self):
         self.assertIn("api_key_configured()", PAGE)
         self.assertIn("OPENAI_API_KEY is not available", PAGE)
-        self.assertNotIn("st.text_input("API", PAGE)
-        self.assertNotIn("st.text_area("API", PAGE)
+        self.assertNotIn('st.text_input("API', PAGE)
+        self.assertNotIn('st.text_area("API', PAGE)
 
     def test_chat_reads_live_project_and_routes_board_review_to_planner(self):
         self.assertIn("snapshot = get_project()", PAGE)
