@@ -36,7 +36,11 @@ from .planner_proposals import (
     preview_board_proposal,
     proposal_change_summary,
 )
-from .project_state import bump_project_revision, project_state_from_payload
+from .project_state import (
+    bump_project_revision,
+    open_project_questions,
+    project_state_from_payload,
+)
 from .ui_theme import apply_theme
 from .working_board_plan import calculate_working_board
 
@@ -232,6 +236,66 @@ def _reload_persisted_board() -> None:
     st.session_state["bp_hmi_selected_uid"] = "root"
     st.session_state["bp_hmi_focus_circuit_id"] = None
     st.rerun()
+
+
+def _render_project_context(board: dict) -> None:
+    """Surface persisted facts/assumptions/questions when collaboration data exists."""
+    state = project_state_from_payload(board)
+    facts = state["facts"]
+    questions = open_project_questions(board)
+    if not facts and not questions:
+        return
+
+    with st.container(border=True):
+        _panel_header(
+            "Project context",
+            "Shared design knowledge stays separate from calculated board results.",
+            f"{len(facts)} FACTS · {len(questions)} OPEN",
+        )
+        facts_col, questions_col = st.columns([1.15, 1.85], gap="small")
+        with facts_col:
+            st.markdown('<div class="bp-review-inspect">Known / assumed</div>', unsafe_allow_html=True)
+            if facts:
+                fact_rows = []
+                for key, fact in facts.items():
+                    value = fact.get("value")
+                    value_text = str(value)
+                    if len(value_text) > 55:
+                        value_text = value_text[:52] + "..."
+                    fact_rows.append(
+                        {
+                            "Key": key,
+                            "Value": value_text,
+                            "Basis": str(fact.get("provenance", "")).replace("_", " ").title(),
+                        }
+                    )
+                st.dataframe(
+                    fact_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(190, 44 + 31 * len(fact_rows)),
+                )
+            else:
+                st.caption("No project facts recorded yet.")
+
+        with questions_col:
+            st.markdown('<div class="bp-review-inspect">Still needed</div>', unsafe_allow_html=True)
+            if questions:
+                question_rows = [
+                    {
+                        "Priority": item["priority"].replace("_", " ").title(),
+                        "Question": item["prompt"],
+                    }
+                    for item in questions
+                ]
+                st.dataframe(
+                    question_rows,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(190, 44 + 31 * len(question_rows)),
+                )
+            else:
+                st.caption("No open project questions.")
 
 
 def _render_pending_proposals(board: dict) -> None:
@@ -706,6 +770,7 @@ def render_board_planner() -> None:
         unsafe_allow_html=True,
     )
 
+    _render_project_context(board)
     _render_pending_proposals(board)
 
     if review is not None:
