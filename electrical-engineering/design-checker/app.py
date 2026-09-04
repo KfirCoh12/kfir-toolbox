@@ -1,6 +1,7 @@
 """Two-mode Streamlit UI for Electrical Design Checker."""
 import streamlit as st
 
+from src.ampacity_data import BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS
 from src.ampacity_router import RoutedAmpacityInput
 from src.cable import CableAmpacityInput
 from src.catalogs import BREAKER_RATINGS_A
@@ -69,12 +70,13 @@ mode = st.radio(
 )
 
 
-def generic_route(material, size, ambient, grouped, arrangement):
+def generic_route(material, size, ambient, grouped, arrangement, phase):
+    loaded_conductors = 2 if phase == "single" else 3
     cable = CableAmpacityInput(
         material=material,
         cross_section_mm2=float(size),
         insulation="xlpe_epr",
-        loaded_conductors=3,
+        loaded_conductors=loaded_conductors,
         installation_method="E",
         environment="air",
         ambient_temperature_c=float(ambient),
@@ -83,15 +85,18 @@ def generic_route(material, size, ambient, grouped, arrangement):
         parallel_runs=1,
         equal_current_sharing_confirmed=None,
         thdi_percent=0.0,
-        neutral_loaded=False,
+        neutral_loaded=phase == "single",
     )
     return cable, RoutedAmpacityInput(source_kind="iec_generic", generic=cable)
 
 
-def source_inputs(prefix=""):
+def source_inputs(phase, prefix=""):
+    source_options = ["Generic XLPE/EPR · IEC"]
+    if phase == "three":
+        source_options.append("NHXH FE180/E90 · Manufacturer")
     source = st.selectbox(
         "Cable source",
-        ["Generic XLPE/EPR · IEC", "NHXH FE180/E90 · Manufacturer"],
+        source_options,
         key=f"{prefix}source",
         help="Choose the data source that matches the existing cable.",
     )
@@ -99,7 +104,10 @@ def source_inputs(prefix=""):
         material = st.selectbox(
             "Conductor material", ["copper", "aluminium"], key=f"{prefix}mat"
         )
-        sizes = [10, 25, 95, 120, 185, 240]
+        loaded_conductors = 2 if phase == "single" else 3
+        sizes = sorted(
+            BASE_IZ_METHOD_E_BY_LOADED_CONDUCTORS[loaded_conductors][material]
+        )
         size = st.selectbox("Phase conductor (mm²)", sizes, key=f"{prefix}size")
         ambient = 30
         grouped = 1
@@ -130,7 +138,9 @@ def source_inputs(prefix=""):
                     key=f"{prefix}arr",
                     help="Physical arrangement used for the grouping correction.",
                 )
-        cable, route = generic_route(material, size, ambient, grouped, arrangement)
+        cable, route = generic_route(
+            material, size, ambient, grouped, arrangement, phase
+        )
         return source, material, float(size), route, cable
 
     st.caption("NHXH FE180/E90 · copper · air · 30 °C")
@@ -201,9 +211,9 @@ if mode == "Design a supply":
 
         if phase == "single":
             st.caption(
-                "Single-phase mode can calculate Ib, a conventional breaker candidate and a "
-                "connection rating. Automatic cable sizing remains NOT VERIFIED because the "
-                "current ampacity dataset covers three loaded conductors only."
+                "Single-phase automatic cable sizing uses the Method E two-loaded-conductor "
+                "dataset with phase and neutral treated as current-carrying conductors. "
+                "Harmonic-rich neutral loading remains outside the automatic sizing scope."
             )
 
         st.markdown("#### Installation")
@@ -498,14 +508,6 @@ else:
                     help="Select the rated current printed on the breaker or protective device.",
                 )
 
-        material = "copper"
-        size = None
-        route = None
-        source = None
-        if use_cable:
-            st.markdown("##### Existing cable")
-            source, material, size, route, _ = source_inputs("cap_")
-
         st.markdown("#### Electrical system")
         phase_col, voltage_col, pf_col, _ = st.columns([1, 1, 1, 1])
         with phase_col:
@@ -531,6 +533,20 @@ else:
                 key="cap_pf",
                 help="Expected operating power factor of the load.",
             )
+
+        material = "copper"
+        size = None
+        route = None
+        source = None
+        if use_cable:
+            st.markdown("##### Existing cable")
+            source, material, size, route, _ = source_inputs(phase, "cap_")
+            if phase == "single":
+                st.caption(
+                    "Generic 1P cable ampacity uses the Method E two-loaded-conductor "
+                    "dataset. Manufacturer NHXH data is currently kept to the supported "
+                    "three-phase route."
+                )
 
         connection_option_id = None
         selected_label = None
