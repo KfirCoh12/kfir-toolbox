@@ -27,7 +27,16 @@ from .hmi_planner_workspace import (
     _route_graph_nodes,
 )
 from .hmi_single_line import render_hmi_single_line_svg
-from .project_state import bump_project_revision
+from .planner_bridge import (
+    apply_proposal as apply_persisted_proposal,
+    reject_proposal as reject_persisted_proposal,
+)
+from .planner_proposals import (
+    pending_board_proposals,
+    preview_board_proposal,
+    proposal_change_summary,
+)
+from .project_state import bump_project_revision, project_state_from_payload
 from .ui_theme import apply_theme
 from .working_board_plan import calculate_working_board
 
@@ -44,6 +53,9 @@ _LAYOUT_CSS = r"""
 .bp-review-empty{font-size:.66rem;color:#7895b6;padding:.32rem .05rem .08rem}
 .bp-review-note{font-size:.62rem;color:#718aa7;line-height:1.35;padding:.35rem .15rem 0}
 .bp-review-inspect{font-size:.61rem;color:#7895b6;text-transform:uppercase;letter-spacing:.08em;font-weight:760;margin:.35rem 0 .25rem}
+.bp-proposal-reason{font-size:.68rem;color:#a9bfd8;line-height:1.45;margin:.2rem 0 .55rem}
+.bp-proposal-stale{font-size:.64rem;color:#e8bf6a}
+.bp-proposal-ok{font-size:.64rem;color:#7dd9aa}
 </style>
 """
 
@@ -61,7 +73,12 @@ def _default_board() -> dict:
 
 
 def _fingerprint(board: dict) -> str:
-    return repr(planner_owned_payload(board))
+    return repr(
+        {
+            "board": planner_owned_payload(board),
+            "project_state": project_state_from_payload(board),
+        }
+    )
 
 
 def _persist(board: dict) -> None:
@@ -71,7 +88,7 @@ def _persist(board: dict) -> None:
     payload = planner_owned_payload(board)
     payload["project_state"] = deepcopy(board["project_state"])
     save_last_board(payload)
-    st.session_state["bp_hmi_source_fingerprint"] = repr(planner_owned_payload(board))
+    st.session_state["bp_hmi_source_fingerprint"] = _fingerprint(board)
 
 
 def _ensure_live_state(saved: dict) -> None:
@@ -207,6 +224,120 @@ def _render_schedule(board: dict, calculated) -> None:
     rows = _event_rows(event)
     if rows and 0 <= rows[0] < len(schedule):
         _focus_route(board, str(schedule[rows[0]]["Circuit"]))
+
+
+def _reload_persisted_board() -> None:
+    st.session_state.pop("bp_hmi_board", None)
+    st.session_state["bp_hmi_source_fingerprint"] = None
+    st.session_state["bp_hmi_selected_uid"] = "root"
+    st.session_state["bp_hmi_focus_circuit_id"] = None
+    st.rerun()
+
+
+def _render_pending_proposals(board: dict) -> None:
+    """Show future assistant proposals only when something is waiting for review."""
+    pending = pending_board_proposals(board)
+    if not pending:
+        return
+
+    state = project_state_from_payload(board)
+    labels = {
+        f"{item['proposal_id']} · {item['title']}": item
+        for item in pending
+    }
+    with st.container(border=True):
+        _panel_header(
+            "Proposed board changes",
+            "Changes from the collaboration layer stay separate until you approve them.",
+            f"{len(pending)} PENDING",
+        )
+        selected_label = st.selectbox(
+            "Pending proposal",
+            options=list(labels),
+            key="bp_pending_proposal_select",
+            label_visibility="collapsed",
+        )
+        proposal = labels[selected_label]
+        stale = int(proposal.get("base_revision", -1)) != int(state["revision"])
+
+        st.markdown(
+            f'<div class="bp-proposal-reason"><strong>{escape(proposal["title"])}</strong><br>{escape(proposal["reason"])}</div>',
+            unsafe_allow_html=True,
+        )
+        change_rows = [{"Change": item} for item in proposal_change_summary(proposal)]
+        st.dataframe(
+            change_rows,
+            use_container_width=True,
+            hide_index=True,
+            height=min(205, 44 + 34 * len(change_rows)),
+        )
+
+        assumptions = proposal.get("assumptions", [])
+        if assumptions:
+            with st.expander(f"Assumptions · {len(assumptions)}", expanded=False):
+                for item in assumptions:
+                    st.write("•", item)
+
+        if stale:
+            st.markdown(
+                f'<div class="bp-proposal-stale">This proposal was created from revision {proposal.get("base_revision")} but the project is now revision {state["revision"]}. It cannot be applied; reject it and create a fresh proposal.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            try:
+                preview_board, _, preview_review = preview_board_proposal(
+                    board,
+                    proposal["proposal_id"],
+                )
+                preview_cols = st.columns(3)
+                preview_cols[0].metric(
+                    "Branches after",
+                    len(preview_board.get("branches", [])),
+                    delta=len(preview_board.get("branches", [])) - len(board.get("branches", [])),
+                )
+                preview_cols[1].metric(
+                    "Attention after",
+                    preview_review.attention_count if preview_review is not None else 0,
+                )
+                preview_cols[2].metric(
+                    "Limitations after",
+                    preview_review.limitation_count if preview_review is not None else 0,
+                )
+                st.markdown(
+                    '<div class="bp-proposal-ok">Preview recalculated successfully through the existing Planner engine.</div>',
+                    unsafe_allow_html=True,
+                )
+            except (TypeError, ValueError) as exc:
+                stale = True
+                st.warning(f"Proposal preview is no longer valid: {exc}")
+
+        apply_col, reject_col, _ = st.columns([1.0, 1.0, 4.0], gap="small")
+        with apply_col:
+            if st.button(
+                "Apply proposal",
+                type="primary",
+                use_container_width=True,
+                disabled=stale,
+                key=f"bp_apply_proposal_{proposal['proposal_id']}",
+            ):
+                try:
+                    apply_persisted_proposal(proposal_id=proposal["proposal_id"])
+                except (OSError, TypeError, ValueError) as exc:
+                    st.error(f"Could not apply proposal: {exc}")
+                else:
+                    _reload_persisted_board()
+        with reject_col:
+            if st.button(
+                "Reject",
+                use_container_width=True,
+                key=f"bp_reject_proposal_{proposal['proposal_id']}",
+            ):
+                try:
+                    reject_persisted_proposal(proposal_id=proposal["proposal_id"])
+                except (OSError, TypeError, ValueError) as exc:
+                    st.error(f"Could not reject proposal: {exc}")
+                else:
+                    _reload_persisted_board()
 
 
 def _render_review_panel(board: dict, review: DesignReviewSummary) -> None:
@@ -525,8 +656,9 @@ def render_board_planner() -> None:
 
     board_id = str(board.get("board_id", "Board"))
     description = str(board.get("description", "Distribution board"))
+    project_revision = project_state_from_payload(board)["revision"]
     st.markdown(
-        f'<div class="bp-topbar"><div class="bp-brand"><div class="bp-brand-mark">◈</div><div><div class="bp-kicker">Electrical distribution · design workstation</div><div class="bp-title">{escape(board_id)} · {escape(description)}</div></div></div><div class="bp-topmeta"><span class="bp-pill live">● AUTOSAVED WORKING BOARD</span><span class="bp-pill">{board.get("line_to_line_voltage_v",400):g} V L-L</span><span class="bp-pill">{len(branches)} branches</span></div></div>',
+        f'<div class="bp-topbar"><div class="bp-brand"><div class="bp-brand-mark">◈</div><div><div class="bp-kicker">Electrical distribution · design workstation</div><div class="bp-title">{escape(board_id)} · {escape(description)}</div></div></div><div class="bp-topmeta"><span class="bp-pill live">● AUTOSAVED WORKING BOARD</span><span class="bp-pill">REV {project_revision}</span><span class="bp-pill">{board.get("line_to_line_voltage_v",400):g} V L-L</span><span class="bp-pill">{len(branches)} branches</span></div></div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -573,6 +705,8 @@ def render_board_planner() -> None:
         f'<div class="bp-kpi-strip"><div class="bp-kpi"><div class="bp-kpi-label">Max phase demand</div><div class="bp-kpi-value">{_fmt_a(max_phase)}</div><div class="bp-kpi-foot">live hierarchy</div></div><div class="bp-kpi"><div class="bp-kpi-label">Incomer candidate</div><div class="bp-kpi-value">{_fmt_rating(incomer)}</div><div class="bp-kpi-foot">planning only</div></div><div class="bp-kpi"><div class="bp-kpi-label">Calculated branches</div><div class="bp-kpi-value">{circuit_count}</div><div class="bp-kpi-foot">feeders + final circuits</div></div><div class="bp-kpi"><div class="bp-kpi-label">Needs attention</div><div class="bp-kpi-value">{attention_count}</div><div class="bp-kpi-foot">{limitation_count} limitations tracked separately</div></div></div>',
         unsafe_allow_html=True,
     )
+
+    _render_pending_proposals(board)
 
     if review is not None:
         _render_review_panel(board, review)
