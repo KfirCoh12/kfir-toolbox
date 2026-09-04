@@ -7,6 +7,12 @@ HMI = (ROOT / "src" / "board_planner_hmi.py").read_text(encoding="utf-8")
 
 
 class PlannerProposalUITests(unittest.TestCase):
+    def test_project_context_surfaces_facts_and_open_questions(self):
+        self.assertIn("Project context", HMI)
+        self.assertIn("Known / assumed", HMI)
+        self.assertIn("Still needed", HMI)
+        self.assertIn("open_project_questions", HMI)
+
     def test_pending_proposals_have_explicit_apply_and_reject_actions(self):
         self.assertIn("Proposed board changes", HMI)
         self.assertIn("Apply proposal", HMI)
