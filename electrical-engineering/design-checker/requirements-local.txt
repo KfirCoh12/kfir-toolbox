@@ -1,0 +1,3 @@
+# Manual-first local desktop app. No AI/API dependency.
+streamlit>=1.38,<2
+pywebview>=5.0,<7; platform_system == "Windows"
