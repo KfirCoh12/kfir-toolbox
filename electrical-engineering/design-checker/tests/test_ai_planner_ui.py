@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE = (ROOT / "pages" / "5_AI_Board_Assistant.py").read_text(encoding="utf-8")
+PAGE = (ROOT / "archive" / "ai" / "5_AI_Board_Assistant.py").read_text(encoding="utf-8")
 ADAPTER = (ROOT / "src" / "ai_planner_assistant.py").read_text(encoding="utf-8")
 
 
